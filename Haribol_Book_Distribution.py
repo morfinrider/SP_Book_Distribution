@@ -326,7 +326,6 @@ def _render_app():
         list_website_submissions,
         daily_summary,
         export_csv,
-        refresh_sales_prices_from_catalogue,
         save_settings,
         set_seller_target,
         sync_distribution_catalogue,
@@ -571,11 +570,6 @@ def _render_app():
                                 "Overview" if name == "Refresh dashboard" else name
                             )
                             st.rerun()
-                        if name == "Refresh dashboard":
-                            _render_sales_price_refresh_control(
-                                "sidebar_price_refresh",
-                                "Refresh totals from catalogue",
-                            )
             st.divider()
             st.caption(f"LOCAL DASHBOARD  ·  v{APP_VERSION}")
             return st.session_state.active_page
@@ -626,40 +620,6 @@ def _render_app():
                 "imported_at": "Imported at",
             }
         )
-
-
-    def _render_sales_price_refresh_control(state_prefix, label):
-        pending_key = f"{state_prefix}_pending"
-        if st.button(
-            label,
-            icon="🔄",
-            key=f"{state_prefix}_request",
-            help="Update legacy sales that do not include collection amounts.",
-        ):
-            st.session_state[pending_key] = True
-        if st.session_state.get(pending_key, False):
-            st.warning(
-                "This updates catalogue prices on matching sales imported from older forms. "
-                "Collection amounts reported in the new form are preserved."
-            )
-            if st.button(
-                "Apply current prices to sales history",
-                type="primary",
-                key=f"{state_prefix}_confirm",
-            ):
-                try:
-                    updated_rows = refresh_sales_prices_from_catalogue()
-                    st.session_state[pending_key] = False
-                    st.success(
-                        f"Updated prices for {updated_rows:,} sale record(s). "
-                        "Revenue totals now use current catalogue prices."
-                    )
-                    st.rerun()
-                except sqlite3.Error as exc:
-                    st.error(f"Could not refresh historical prices: {exc}")
-            if st.button("Cancel", key=f"{state_prefix}_cancel"):
-                st.session_state[pending_key] = False
-                st.rerun()
 
 
     def _render_overview():

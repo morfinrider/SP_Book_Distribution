@@ -147,7 +147,7 @@ The workbook tabs must have these headers (column names are case-insensitive): `
 
 The **Book catalogue** page displays the title, category, language, price, and points variants synced from the spreadsheet's `Lists` tab. It refreshes automatically while the page is open and can also be refreshed with **Sync book list from Google Sheet**. This view is read-only: to add or change a title, language, price, or points value, edit the `Lists` tab in the source workbook. There is no local catalogue editor or CSV upload/link control. The app keeps an internal local catalogue mirror for its existing data and analytics services; it is not a separate source to maintain.
 
-New form imports store the reported amount collected and Shastra Daan for each book line, plus location and remarks. These reported amounts are preserved in dashboard totals and exports. Legacy imports continue to use catalogue price and points per copy; **Refresh totals from catalogue** in the sidebar updates legacy prices without changing amounts reported by the new form.
+New form imports store the reported amount collected and Shastra Daan for each book line, plus location and remarks. These reported amounts are preserved in dashboard totals and exports. Legacy imports use the catalogue price and points per copy available when they are imported; website response totals are preserved as reported by the spreadsheet.
 
 ## Data model and modular structure
 

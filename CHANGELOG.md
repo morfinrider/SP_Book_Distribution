@@ -7,7 +7,7 @@
 - Display book-level responses and submission summaries, preserving sheet-reported prices, amounts, points, and totals
 - Support private Google Sheets access with server-side service-account credentials
 - Remove the response CSV upload page; website responses sync directly from the workbook
-- Make the spreadsheet the only catalogue source in the UI; remove local editing, book creation, and standalone catalogue CSV import/URL controls
+- Make the spreadsheet the only catalogue source in the UI; remove local editing, book creation, catalogue CSV controls, and historical price refresh action
 
 ## [1.8.0] - 2026-11-12
 
