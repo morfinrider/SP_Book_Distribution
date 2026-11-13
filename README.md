@@ -2,6 +2,8 @@
 
 A modular, cross-platform application built with Python, Streamlit, pandas, and SQLite. It runs locally on Windows, macOS, and Linux. No Node.js, React, PowerShell, external CSS, hosted backend, Google API credentials, or Google Cloud project is required.
 
+The app can also be launched from Streamlit Community Cloud using `streamlit_app.py`. Cloud hosting does not make the local SQLite database durable; see [Streamlit Community Cloud deployment](#streamlit-community-cloud-deployment) before using it with real sales data.
+
 ## Configuration
 
 All app-level configuration is in the root `.env` file:
@@ -111,6 +113,17 @@ Stop the app from the project folder with:
 The app log and local database are kept in `Haribol_Book_Distribution_Data`. The full storage path is not displayed in the UI. The included `scripts/start_windows.bat` and `scripts/start_macos_linux.sh` are optional convenience launchers. On macOS/Linux, if necessary, run `chmod +x scripts/start_macos_linux.sh` once.
 
 The app interface is contained in `Haribol_Book_Distribution.py`; there is no separate frontend entry-point file. A sample-data folder is not required to run the app.
+
+## Streamlit Community Cloud deployment
+
+The Cloud entry point is `streamlit_app.py`. It invokes the existing dashboard directly instead of starting the local launcher or a second Streamlit process.
+
+1. Push this project to a GitHub repository you can access. Do not commit `.env`, the local database, or imported sales CSVs.
+2. In [Streamlit Community Cloud](https://share.streamlit.io/), create an app from that repository and select the branch and `streamlit_app.py` as the **Main file path**.
+3. Deploy. The dependencies are installed from `requirements.txt`; no local launcher command or additional secrets are needed for the default configuration.
+4. Choose the app's visibility and sharing access deliberately in the Streamlit app settings. The application itself does not provide login or role-based access.
+
+**Important: Community Cloud is not durable storage for this app's data.** Sales, catalogue changes, targets, and settings are stored in local SQLite and `.env` files; those files can be lost when the app is restarted or redeployed. The app starts with a new database if no database file is present. Do not use this deployment for live records or as the only copy of business data. Before relying on it, migrate the database and settings to durable hosted storage and verify backups and access controls. Local backups do not automatically sync to Cloud.
 
 ## Google Form setup
 
