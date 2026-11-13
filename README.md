@@ -11,16 +11,15 @@ All app-level configuration is in the root `.env` file:
 ```dotenv
 APP_NAME=Haribol_Book_Distribution
 BOOK_SALES_DATA_DIR=Haribol_Book_Distribution_Data
-CATALOGUE_CSV_URL=
 OVERALL_POINTS_TARGET=0
 OVERALL_TARGET_START_DATE=
 OVERALL_TARGET_END_DATE=
 FALLBACK_POINTS=1
 ```
 
-`APP_NAME` controls the displayed app identity. `BOOK_SALES_DATA_DIR` is the simple local data-folder name (relative to the project unless an absolute path is intentionally configured). `CATALOGUE_CSV_URL` stores the optional public CSV source. `OVERALL_POINTS_TARGET` is the overall dashboard target; optional `OVERALL_TARGET_START_DATE` and `OVERALL_TARGET_END_DATE` values limit its progress calculation to an inclusive date period. Leave either date blank to keep that side of the period open. Dates use `YYYY-MM-DD`. `FALLBACK_POINTS` sets points for unknown titles. These settings can be updated in the UI; app-level preferences are saved back to `.env`.
+`APP_NAME` controls the displayed app identity. `BOOK_SALES_DATA_DIR` is the simple local data-folder name (relative to the project unless an absolute path is intentionally configured). `OVERALL_POINTS_TARGET` is the overall dashboard target; optional `OVERALL_TARGET_START_DATE` and `OVERALL_TARGET_END_DATE` values limit its progress calculation to an inclusive date period. Leave either date blank to keep that side of the period open. Dates use `YYYY-MM-DD`. `FALLBACK_POINTS` sets points for unknown titles. These settings can be updated in the UI; app-level preferences are saved back to `.env`.
 
-Environment variables with the same names override `.env`. The local `.env` file is gitignored; do not upload it. Book catalogue values, individual devotee targets, and sales records are business data and remain in the local database, managed from the UI.
+Environment variables with the same names override `.env`. The local `.env` file is gitignored; do not upload it. The Google Sheet is the source of truth for book variants, prices, and points. Individual devotee targets and sales records remain in the local database.
 
 The app version is read from the newest release in `CHANGELOG.md`; it is not a manually edited `.env` value. When preparing a release, run one of these from the project folder to automatically increment the version and add a dated release-history entry:
 
@@ -34,7 +33,7 @@ Use `feature` for a minor-version increment, `fix` for a patch increment, and `b
 
 ## What is configurable?
 
-- Book catalogue, price, and points per book in the Book catalogue UI (with an internal Excel-compatible CSV mirror).
+- Read-only book catalogue and language variants synced from the Google Sheet.
 - Overall points target with optional start and end dates; progress includes sales on both boundary dates and is capped at the selected analytics date.
 - Individual target per devotee.
 - Fallback points for unknown book titles.
@@ -54,7 +53,7 @@ Each valid synced book-level response can represent multiple copies of one book.
 - pandas for tabular analytics
 - Python standard library for CSV parsing, hashing, file management and database access; `google-auth` for optional Google Sheets service-account access
 
-Dependencies are installed from PyPI during setup. After installation, normal app use does not need an internet connection; syncing an optional hosted catalogue or Google Sheets workbook does. No external CSS or font URLs are used; the app uses system fonts and Streamlit's built-in styling.
+Dependencies are installed from PyPI during setup. After installation, normal app use does not need an internet connection; syncing the Google Sheets workbook does. No external CSS or font URLs are used; the app uses system fonts and Streamlit's built-in styling.
 
 ## Setup
 
@@ -142,24 +141,11 @@ The service-account credential stays on the server and is never sent to the brow
 
 The workbook tabs must have these headers (column names are case-insensitive): `Lists`: `Book Category, Book, Language, Price, Points`; `responses`: `submission_id, submitted_at, name, location, date, book_category, book_name, language, quantity, price, amount, points, points_total`; `submissions`: `submission_id, submitted_at, name, location, date, total_copies, total_points, lakshmi_due, lakshmi_transferred, shastra_daan`. The service account needs Viewer access to this workbook.
 
-**Important: Community Cloud is not durable storage for this app's data.** Sales, catalogue changes, targets, and settings are stored in local SQLite and `.env` files; those files can be lost when the app is restarted or redeployed. Website responses can be fetched again from the response sheet, but app-only changes do not automatically persist. Keep the source sheet and independent backups, and migrate to durable hosted storage before relying on Cloud as the system of record.
+**Important: Community Cloud is not durable storage for this app's data.** Sales, targets, and settings are stored in local SQLite and `.env` files; those files can be lost when the app is restarted or redeployed. The catalogue can be synced again from the source sheet, and website responses can be fetched again from the response sheet, but app-only changes do not automatically persist. Keep the source sheet and independent backups, and migrate to durable hosted storage before relying on Cloud as the system of record.
 
 ## Book catalogue, prices, and points
 
-Edit books, short codes, tags, prices, points, and active status in the **Book catalogue** page. Codes are unique, case-insensitive, and used to identify books in form entries. Tags can be free text such as small book, medium book, or big book. Changes are saved to the local database and mirrored to an internal CSV; there is no need to locate or edit that file manually. The CSV uses these columns:
-
-```csv
-book_name,code,book_tag,price,points
-Bhagavad Gita,BG,big book,0.00,1
-Krishna Book,KB,big book,0.00,1
-Srimad Bhagavatam,SB,big book,0.00,1
-```
-
-Price and points are entered per copy; both support decimal values (for example, 1.25 points). The application creates or updates this file from the catalogue stored locally.
-
-To update several titles at once, expand **Upload catalogue CSV** in the Book catalogue page and upload a UTF-8 CSV (up to 2 MB) with book name and price columns. Column names may be `book_name`/`book`/`title` and `price`/`price per copy`/`MRP`. Points, code, and book tag columns are optional. The import merges rows: it adds new books and updates matching titles, while leaving unlisted books active. Existing codes, tags, and points are preserved when the CSV omits them or leaves them blank; new books default to 1 point per copy. After import, add missing short codes or tags in the catalogue editor.
-
-To sync from a hosted catalogue, open **Settings → Connect a book catalogue CSV**, paste a public HTTPS link to a CSV containing `book_name`, `price`, and `points`, and optionally `code` and `book_tag`, then select **Save link and sync catalogue**. The backend validates and downloads the CSV (UTF-8, up to 2 MB); titles omitted from the linked catalogue are deactivated. If the optional columns are omitted, existing codes and tags are retained. Use a Google Sheets CSV export link, not a link to the regular spreadsheet webpage.
+The **Book catalogue** page displays the title, category, language, price, and points variants synced from the spreadsheet's `Lists` tab. It refreshes automatically while the page is open and can also be refreshed with **Sync book list from Google Sheet**. This view is read-only: to add or change a title, language, price, or points value, edit the `Lists` tab in the source workbook. There is no local catalogue editor or CSV upload/link control. The app keeps an internal local catalogue mirror for its existing data and analytics services; it is not a separate source to maintain.
 
 New form imports store the reported amount collected and Shastra Daan for each book line, plus location and remarks. These reported amounts are preserved in dashboard totals and exports. Legacy imports continue to use catalogue price and points per copy; **Refresh totals from catalogue** in the sidebar updates legacy prices without changing amounts reported by the new form.
 
@@ -168,7 +154,7 @@ New form imports store the reported amount collected and Shastra Daan for each b
 ```text
 Haribol_Book_Distribution/
 ├── Haribol_Book_Distribution.py # Launcher and Streamlit UI
-├── .env                       # App name, data folder and CSV settings
+├── .env                       # App name, data folder and app preferences
 ├── CHANGELOG.md               # Release history and current app version
 ├── backend/
 │   └── book_sales/            # Data access and application services
@@ -202,14 +188,14 @@ The app opens with an expandable left-side navigation for the dashboard and mana
 
 - The server binds to `127.0.0.1`, not `0.0.0.0`.
 - Usage statistics are disabled by the launcher.
-- No cloud database or third-party analytics are configured. An optional catalogue sync fetches only the public HTTPS CSV URL explicitly supplied in Settings; the UI uses system fonts and inline CSS.
+- No cloud database or third-party analytics are configured. The optional Google Sheets sync reads the configured workbook; the UI uses system fonts and inline CSS.
 - The database and imported CSV archives are stored in `Haribol_Book_Distribution_Data`.
-- Normal app use can be offline; syncing a hosted catalogue requires internet access.
+- Normal app use can be offline; syncing the Google Sheets workbook requires internet access.
 - Do not expose the app through port forwarding or change the bind address if it must remain local-only.
 
 ## Backups
 
-Use **Settings → Data and backups → Download complete data backup** to download the database, catalogue mirror, and imported CSV archives as a ZIP. The local folder is also named `Haribol_Book_Distribution_Data`; the UI does not expose its full operating-system path. Keep `.env` locally to preserve app name, storage-folder name, and CSV settings; it is intentionally excluded from Git uploads.
+Use **Settings → Data and backups → Download complete data backup** to download the database, catalogue mirror, and imported CSV archives as a ZIP. The local folder is also named `Haribol_Book_Distribution_Data`; the UI does not expose its full operating-system path. Keep `.env` locally to preserve app name, storage-folder name, and app preferences; it is intentionally excluded from Git uploads.
 
 ## Scalability notes
 

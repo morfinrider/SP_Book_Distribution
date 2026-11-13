@@ -1,4 +1,11 @@
-from .catalogue import add_book, update_book, deactivate_book, import_catalogue_csv, list_book_variants, list_books, refresh_sales_prices_from_catalogue, sync_book_catalogue_from_url
+from .catalogue import (
+    add_book,
+    deactivate_book,
+    list_book_variants,
+    list_books,
+    refresh_sales_prices_from_catalogue,
+    update_book,
+)
 from .sellers import add_seller, update_seller, list_sellers, set_seller_target, list_seller_targets
 from .settings import get_settings, save_settings
 from .importer import import_response_csv

@@ -308,13 +308,9 @@ def _render_app():
     from book_sales.config import (
         APP_NAME,
         APP_VERSION,
-        CATALOGUE_CSV_URL,
-        get_env_setting,
-        save_env_settings,
     )
     from book_sales.db import initialize_database
     from book_sales.services import (
-        add_book,
         add_seller,
         book_performance,
         dashboard_summary,
@@ -322,9 +318,7 @@ def _render_app():
         create_backup_zip,
         export_sales_csv,
         get_settings,
-        import_catalogue_csv,
         leaderboard,
-        list_books,
         list_imports,
         list_sales,
         list_seller_targets,
@@ -337,8 +331,6 @@ def _render_app():
         set_seller_target,
         sync_distribution_catalogue,
         sync_distribution_responses,
-        sync_book_catalogue_from_url,
-        update_book,
         update_sale_points,
         list_book_variants,
     )
@@ -1070,10 +1062,14 @@ def _render_app():
 
 
     def _render_catalogue():
-        _page_heading("Books & values", "Book catalogue", "Maintain each book's short code, category, price, and points.")
+        _page_heading(
+            "Books & values",
+            "Book catalogue",
+            "Browse book categories, languages, prices, and points synced from the spreadsheet.",
+        )
         st.caption(
-            "The spreadsheet is authoritative for website book variants, languages, prices, "
-            "and points. Local prices and points below remain for legacy Google Forms imports."
+            "The Google Sheet is the source of truth. Update its Lists tab to change the "
+            "catalogue; this page is read-only."
         )
         if st.button("Sync book list from Google Sheet"):
             try:
@@ -1101,7 +1097,7 @@ def _render_app():
                 except (ValueError, OSError, sqlite3.Error) as exc:
                     st.error(f"Could not refresh the spreadsheet catalogue: {exc}")
             variants = list_book_variants(include_inactive=True)
-            st.markdown("#### Website catalogue from spreadsheet")
+            st.markdown("#### Catalogue from spreadsheet")
             if variants.empty:
                 st.info("Sync the spreadsheet to load book languages, prices, and points.")
             else:
@@ -1133,143 +1129,6 @@ def _render_app():
                 )
 
         _render_sheet_catalogue()
-        with st.expander("Upload catalogue CSV", expanded=False):
-            st.caption(
-                "Upload a CSV with book name and price columns. Points, short code, and tag "
-                "are optional. Listed books are added or updated; unlisted books stay active. "
-                "Existing codes, tags, and points are preserved when omitted."
-            )
-            catalogue_upload = st.file_uploader(
-                "Choose catalogue CSV",
-                type=["csv"],
-                key="catalogue_csv_upload",
-                help="UTF-8 CSV, up to 2 MB. Required columns: book name and price.",
-            )
-            if catalogue_upload and st.button(
-                "Import catalogue CSV",
-                type="primary",
-                key="import_catalogue_csv",
-            ):
-                try:
-                    result = import_catalogue_csv(catalogue_upload.getvalue())
-                    st.success(
-                        f"Catalogue import complete: {result['added']} book(s) added, "
-                        f"{result['updated']} book(s) updated."
-                    )
-                    st.rerun()
-                except (ValueError, OSError, sqlite3.Error) as exc:
-                    st.error(f"Could not import catalogue CSV: {exc}")
-
-        books = list_books(include_inactive=True)
-        if not books.empty:
-            editable = books[["id", "book_name", "code", "book_tag", "languages", "price", "default_points", "active"]].copy()
-            editable["default_points"] = editable["default_points"].astype(float)
-            editable["active"] = editable["active"].astype(bool)
-            edited = st.data_editor(
-                editable,
-                hide_index=True,
-                use_container_width=True,
-                num_rows="fixed",
-                disabled=["id", "languages"],
-                column_config={
-                    "id": None,
-                    "book_name": st.column_config.TextColumn("Book title", required=True),
-                    "code": st.column_config.TextColumn(
-                        "Short code",
-                        help="Unique, case-insensitive code entered in the Google Form.",
-                    ),
-                    "book_tag": st.column_config.TextColumn(
-                        "Book tag",
-                        help="For example: small book, medium book, or big book.",
-                    ),
-                    "languages": st.column_config.TextColumn(
-                        "Available languages",
-                        help="Synced from the book-distribution Google Sheet.",
-                    ),
-                    "price": st.column_config.NumberColumn("Price per copy", min_value=0, format="%.2f"),
-                    "default_points": st.column_config.NumberColumn(
-                        "Points per copy", min_value=0.0, step=0.01, format="%.2f"
-                    ),
-                    "active": st.column_config.CheckboxColumn("Active", help="Inactive books remain in sales history."),
-                },
-                key="book_catalogue_editor",
-            )
-            if st.button("Save catalogue changes", type="primary"):
-                original = books.set_index("id")
-                try:
-                    for _, row in edited.iterrows():
-                        previous = original.loc[row["id"]]
-                        name = str(row["book_name"]).strip()
-                        code = str(row["code"] or "").strip()
-                        book_tag = str(row["book_tag"] or "").strip()
-                        price = float(row["price"])
-                        points = float(row["default_points"])
-                        active = bool(row["active"])
-                        if (
-                            name != previous["book_name"]
-                            or code != str(previous["code"] or "")
-                            or book_tag != str(previous["book_tag"] or "")
-                            or price != float(previous["price"])
-                            or points != float(previous["default_points"])
-                            or active != bool(previous["active"])
-                        ):
-                            update_book(
-                                int(row["id"]),
-                                points,
-                                price,
-                                name=name,
-                                active=active,
-                                code=code,
-                                book_tag=book_tag,
-                            )
-                    st.success("Book catalogue saved.")
-                    st.rerun()
-                except (ValueError, TypeError) as exc:
-                    st.error(f"Could not save the catalogue: {exc}")
-        else:
-            st.info("Add your first book to begin.")
-
-        with st.expander("Historical sales prices"):
-            st.caption(
-                "The sidebar action updates catalogue prices for legacy sales. Collection "
-                "amounts and Shastra Daan reported by the new form remain unchanged."
-            )
-
-        with st.expander("Add a book"):
-            with st.form("add_book_form", clear_on_submit=True):
-                name = st.text_input("Book title")
-                code = st.text_input(
-                    "Short code",
-                    help="A unique code devotees enter in the Google Form.",
-                )
-                book_tag = st.text_input(
-                    "Book tag",
-                    placeholder="For example: small book",
-                )
-                first, second = st.columns(2)
-                price = first.number_input("Price per copy", min_value=0.0, max_value=1_000_000.0, value=0.0, step=0.01, format="%.2f")
-                points = second.number_input(
-                    "Points per copy",
-                    min_value=0.0,
-                    max_value=100_000.0,
-                    value=1.0,
-                    step=0.01,
-                    format="%.2f",
-                )
-                if st.form_submit_button("Add book", type="primary"):
-                    try:
-                        add_book(
-                            name,
-                            float(points),
-                            float(price),
-                            book_tag=book_tag,
-                            code=code,
-                        )
-                        st.success("Book added.")
-                        st.rerun()
-                    except ValueError as exc:
-                        st.error(str(exc))
-
 
     def _render_devotees():
         _page_heading("People & goals", "Devotees and targets", "Keep your devotee directory and individual goals up to date.")
@@ -1417,28 +1276,6 @@ def _render_app():
                         st.rerun()
                     except (ValueError, OSError) as exc:
                         st.error(f"Could not save preferences: {exc}")
-
-        with st.expander("Connect a book catalogue CSV", expanded=True):
-            st.markdown(
-                "Paste a **public HTTPS** link to a CSV with `book_name`, `price`, and `points` columns. "
-                "Saving and syncing refreshes the backend catalogue; titles missing from the CSV are deactivated."
-            )
-            with st.form("catalogue_url_form"):
-                catalogue_url = st.text_input(
-                    "Book catalogue CSV URL",
-                    value=get_env_setting("CATALOGUE_CSV_URL", CATALOGUE_CSV_URL),
-                    placeholder="https://docs.google.com/spreadsheets/d/.../export?format=csv",
-                )
-                if st.form_submit_button("Save link and sync catalogue", type="primary"):
-                    try:
-                        if not catalogue_url.strip():
-                            raise ValueError("Paste a catalogue CSV URL first.")
-                        count = sync_book_catalogue_from_url(catalogue_url.strip())
-                        save_env_settings({"CATALOGUE_CSV_URL": catalogue_url.strip()})
-                        st.success(f"Backend catalogue refreshed: {count} book(s) synchronized.")
-                        st.rerun()
-                    except (ValueError, OSError) as exc:
-                        st.error(f"Catalogue sync failed: {exc}")
 
         with st.expander("Data and backups"):
             st.caption(
