@@ -45,7 +45,6 @@ def get_env_setting(name, default=None):
 APP_NAME = _setting("APP_NAME", "Haribol_Book_Distribution")
 APP_VERSION = _read_app_version()
 IMPORT_FILENAME_PATTERN = _setting("IMPORT_FILENAME_PATTERN", "book_sales_{date}.csv")
-CATALOGUE_CSV_URL = _setting("CATALOGUE_CSV_URL", "")
 _DATA_DIR_SETTING = Path(
     _setting("BOOK_SALES_DATA_DIR", "Haribol_Book_Distribution_Data")
 ).expanduser()
@@ -78,7 +77,6 @@ def save_env_settings(values):
         "APP_NAME",
         "BOOK_SALES_DATA_DIR",
         "IMPORT_FILENAME_PATTERN",
-        "CATALOGUE_CSV_URL",
         "OVERALL_POINTS_TARGET",
         "OVERALL_TARGET_START_DATE",
         "OVERALL_TARGET_END_DATE",
