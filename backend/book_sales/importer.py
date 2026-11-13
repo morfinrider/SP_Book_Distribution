@@ -19,6 +19,7 @@ ALIASES = {
     "seller": ["Devotee", "Name", "Person", "Seller Name", "Seller", "Distributor", "Devotee Name"],
     "date": ["Date of Sale", "Sale Date", "Date", "Distribution Date"],
     "book": ["Book Sold", "Book", "Book Name", "Title"],
+    "language": ["Language", "Book Language"],
     "quantity": ["Quantity", "Qty", "Number of Books", "Books Quantity"],
     "book_entries": ["Books Distributed", "Book Distribution Entries"],
     "location": ["Location", "Distribution Location"],
@@ -83,12 +84,13 @@ def _infer_dayfirst(dates):
     return next(iter(evidence)) if len(evidence) == 1 else None
 
 
-def row_key(timestamp, seller, sale_date, book, item_index=None):
+def row_key(timestamp, seller, sale_date, book, item_index=None, language=""):
     parts = [
         timestamp.strip().casefold(),
         seller.strip().casefold(),
         sale_date,
         book.strip().casefold(),
+        language.strip().casefold(),
     ]
     if item_index is not None:
         parts.append(str(item_index))
@@ -259,6 +261,7 @@ def import_response_csv(content, filename):
             sale_date = parse_date(pick(row, ALIASES["date"]), dayfirst)
             book = pick(row, ALIASES["book"])
             location = pick(row, ALIASES["location"])
+            language = pick(row, ALIASES["language"])
             remarks = pick(row, ALIASES["remarks"])
             if has_book_entries:
                 sale_items, entry_errors = _parse_book_entries(
@@ -337,6 +340,7 @@ def import_response_csv(content, filename):
                     sale_date,
                     book,
                     item_index if has_book_entries else None,
+                    language,
                 )
                 book_pricing = pricing_catalogue.get(book.casefold())
                 if book_pricing is None:
@@ -347,11 +351,11 @@ def import_response_csv(content, filename):
                     points, unit_price = book_pricing
                 cur = con.execute("""
                     INSERT OR IGNORE INTO sales
-                    (row_key,form_timestamp,seller_name,sale_date,book_name,location,remarks,
+                    (row_key,form_timestamp,seller_name,sale_date,book_name,language,location,remarks,
                      points,quantity,unit_price,amount_collected,shastra_daan,source_file,imported_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
-                    key, timestamp, seller, sale_date, book, location, remarks, points, quantity,
+                    key, timestamp, seller, sale_date, book, language, location, remarks, points, quantity,
                     unit_price, amount_collected, shastra_daan, Path(filename).name, imported_at,
                 ))
                 if cur.rowcount:

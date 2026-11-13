@@ -1,6 +1,6 @@
 # Haribol_Book_Distribution
 
-A modular, cross-platform application built with Python, Streamlit, pandas, and SQLite. It runs locally on Windows, macOS, and Linux. No Node.js, React, PowerShell, external CSS, hosted backend, Google API credentials, or Google Cloud project is required.
+A modular, cross-platform application built with Python, Streamlit, pandas, and SQLite. It runs locally on Windows, macOS, and Linux. No Node.js, React, PowerShell, external CSS, hosted backend, or Google Cloud project is required for local/default use. Google Sheets credentials are needed only for the optional live spreadsheet sync.
 
 The app can also be launched from Streamlit Community Cloud using `streamlit_app.py`. Cloud hosting does not make the local SQLite database durable; see [Streamlit Community Cloud deployment](#streamlit-community-cloud-deployment) before using it with real sales data.
 
@@ -11,7 +11,6 @@ All app-level configuration is in the root `.env` file:
 ```dotenv
 APP_NAME=Haribol_Book_Distribution
 BOOK_SALES_DATA_DIR=Haribol_Book_Distribution_Data
-IMPORT_FILENAME_PATTERN=book_sales_{date}.csv
 CATALOGUE_CSV_URL=
 OVERALL_POINTS_TARGET=0
 OVERALL_TARGET_START_DATE=
@@ -19,7 +18,7 @@ OVERALL_TARGET_END_DATE=
 FALLBACK_POINTS=1
 ```
 
-`APP_NAME` controls the displayed app identity. `BOOK_SALES_DATA_DIR` is the simple local data-folder name (relative to the project unless an absolute path is intentionally configured). `IMPORT_FILENAME_PATTERN` uses `{date}`, which is filled with today's date in `YYYY-MM-DD` format. `CATALOGUE_CSV_URL` stores the optional public CSV source. `OVERALL_POINTS_TARGET` is the overall dashboard target; optional `OVERALL_TARGET_START_DATE` and `OVERALL_TARGET_END_DATE` values limit its progress calculation to an inclusive date period. Leave either date blank to keep that side of the period open. Dates use `YYYY-MM-DD`. `FALLBACK_POINTS` sets points for unknown titles. These settings can be updated in the UI; app-level preferences are saved back to `.env`.
+`APP_NAME` controls the displayed app identity. `BOOK_SALES_DATA_DIR` is the simple local data-folder name (relative to the project unless an absolute path is intentionally configured). `CATALOGUE_CSV_URL` stores the optional public CSV source. `OVERALL_POINTS_TARGET` is the overall dashboard target; optional `OVERALL_TARGET_START_DATE` and `OVERALL_TARGET_END_DATE` values limit its progress calculation to an inclusive date period. Leave either date blank to keep that side of the period open. Dates use `YYYY-MM-DD`. `FALLBACK_POINTS` sets points for unknown titles. These settings can be updated in the UI; app-level preferences are saved back to `.env`.
 
 Environment variables with the same names override `.env`. The local `.env` file is gitignored; do not upload it. Book catalogue values, individual devotee targets, and sales records are business data and remain in the local database, managed from the UI.
 
@@ -40,12 +39,12 @@ Use `feature` for a minor-version increment, `fix` for a patch increment, and `b
 - Individual target per devotee.
 - Fallback points for unknown book titles.
 - Manual point correction for a specific historical sale.
-- Devotee leaderboard, daily totals, book-by-book performance, filters, CSV exports, and import history.
+- Devotee leaderboard, daily totals, book-by-book performance, filters, CSV exports, and prior import history.
 - Overview comparisons against the previous day, configurable 7/30/90-day trends, average copies per sale/day, and best distribution day.
 
 The Overview date controls the daily metrics and book performance. Overall target progress uses points accumulated through the selected date, including that date. The trend period selector shows activity up to the selected date; the summary metrics include a previous-day comparison where available.
 
-Each valid imported form response can represent multiple copies of one book. New sales store **price and points snapshots** based on the catalogue values at import time. Updating a book's price or points does not silently rewrite historical sales.
+Each valid synced book-level response can represent multiple copies of one book. Website sales preserve the response sheet's reported price and points totals. Updating the catalogue does not silently rewrite historical sales.
 
 ## Technology
 
@@ -53,9 +52,9 @@ Each valid imported form response can represent multiple copies of one book. New
 - Streamlit for the local user interface
 - SQLite for durable local storage
 - pandas for tabular analytics
-- Python standard library for CSV parsing, hashing, file management and database access
+- Python standard library for CSV parsing, hashing, file management and database access; `google-auth` for optional Google Sheets service-account access
 
-Dependencies are installed from PyPI during setup. After installation, normal app use does not need an internet connection; syncing an optional hosted catalogue does. No external CSS or font URLs are used; the app uses system fonts and Streamlit's built-in styling.
+Dependencies are installed from PyPI during setup. After installation, normal app use does not need an internet connection; syncing an optional hosted catalogue or Google Sheets workbook does. No external CSS or font URLs are used; the app uses system fonts and Streamlit's built-in styling.
 
 ## Setup
 
@@ -112,7 +111,7 @@ Stop the app from the project folder with:
 
 The app log and local database are kept in `Haribol_Book_Distribution_Data`. The full storage path is not displayed in the UI. The included `scripts/start_windows.bat` and `scripts/start_macos_linux.sh` are optional convenience launchers. On macOS/Linux, if necessary, run `chmod +x scripts/start_macos_linux.sh` once.
 
-The app interface is contained in `Haribol_Book_Distribution.py`; there is no separate frontend entry-point file. A sample-data folder is not required to run the app.
+The app interface is contained in `Haribol_Book_Distribution.py`. `streamlit_app.py` is a thin entry point for Streamlit Community Cloud. A sample-data folder is not required to run the app.
 
 ## Streamlit Community Cloud deployment
 
@@ -120,47 +119,30 @@ The Cloud entry point is `streamlit_app.py`. It invokes the existing dashboard d
 
 1. Push this project to a GitHub repository you can access. Do not commit `.env`, the local database, or imported sales CSVs.
 2. In [Streamlit Community Cloud](https://share.streamlit.io/), create an app from that repository and select the branch and `streamlit_app.py` as the **Main file path**.
-3. Deploy. The dependencies are installed from `requirements.txt`; no local launcher command or additional secrets are needed for the default configuration.
-4. Choose the app's visibility and sharing access deliberately in the Streamlit app settings. The application itself does not provide login or role-based access.
+3. Deploy. The dependencies are installed from `requirements.txt`; no local launcher command or secrets are needed to open the app. Add the Google Sheets secret below to enable workbook sync.
+4. Choose **Private** visibility in the Streamlit app settings and grant access only to approved users. The application itself does not provide login or role-based access.
 
-**Important: Community Cloud is not durable storage for this app's data.** Sales, catalogue changes, targets, and settings are stored in local SQLite and `.env` files; those files can be lost when the app is restarted or redeployed. The app starts with a new database if no database file is present. Do not use this deployment for live records or as the only copy of business data. Before relying on it, migrate the database and settings to durable hosted storage and verify backups and access controls. Local backups do not automatically sync to Cloud.
+To sync website submissions while keeping the response sheet private, create a Google service account, enable the Google Sheets API, and share the response spreadsheet with the service account's email as a Viewer. Add its credentials as a server-side secret in the app's **Settings → Secrets** in Streamlit Community Cloud:
 
-## Google Form setup
-
-Create questions for the distribution date, distributor, location, book entries, collection summary, total Shastra Daan, total books distributed, and optional remarks. In **Books Distributed**, require one entry per line in this format:
-
-```text
-BookCode | Quantity | AmountCollected | ShastraDaan
-BG | 1 | 100 | 250
-SSR | 2 | 300 | 0
-KB | 1 | 500 | 0
+```toml
+[google_service_account]
+type = "service_account"
+project_id = "your-project-id"
+private_key_id = "your-private-key-id"
+private_key = """-----BEGIN PRIVATE KEY-----
+your-private-key
+-----END PRIVATE KEY-----
+"""
+client_email = "your-service-account@your-project-id.iam.gserviceaccount.com"
+client_id = "your-client-id"
+token_uri = "https://oauth2.googleapis.com/token"
 ```
 
-Use the short codes configured in the app's Book catalogue. Amounts are totals for each book line, not per-copy amounts. The app checks the entry totals against Total Collection Received, Total Shastra Daan, and Total Books Distributed.
+The service-account credential stays on the server and is never sent to the browser. Do not paste it into source code or commit it. An API key can be used only if the workbook is public-readable; restrict that key to the Sheets API and store it in Cloud Secrets as `GOOGLE_SHEETS_API_KEY`. HTTP-referrer restrictions are not suitable for this server-to-server request. The **Response entry** page embeds the existing `books.iskw.in` form, which remains publicly accessible at its original URL even when this Streamlit app is private. Website submissions are imported with **Sync website responses**; there is no response CSV upload page. The spreadsheet's `Lists` tab supplies the live title, category, language, price, and points variants. The `responses` tab supplies book-level rows, including the submitted price, amount, points, and points total; these appear in **Book-level responses** and are also used in dashboard totals. The `submissions` tab supplies full-submission totals and Lakshmi/Shastra Daan values, shown in **Submission summaries**. Both catalogue and response data refresh on page open and every five minutes while their pages are open, or immediately with the sync button. Repeated syncs update changed rows and do not duplicate them. Website sales retain the values reported in the response sheet; later catalogue changes do not rewrite historical sales.
 
-Link responses to a Google Sheet. Each submission can contain multiple book lines. Export the response sheet/tab as CSV and import it through the app. The app does not connect to Google's API.
+The workbook tabs must have these headers (column names are case-insensitive): `Lists`: `Book Category, Book, Language, Price, Points`; `responses`: `submission_id, submitted_at, name, location, date, book_category, book_name, language, quantity, price, amount, points, points_total`; `submissions`: `submission_id, submitted_at, name, location, date, total_copies, total_points, lakshmi_due, lakshmi_transferred, shastra_daan`. The service account needs Viewer access to this workbook.
 
-Keep short codes aligned with the active titles in the app's Book catalogue. The form's book-code reference can list commonly used codes; the full catalogue remains managed in the app.
-
-## Daily CSV naming
-
-The default name is `book_sales_YYYY-MM-DD.csv`, for example `book_sales_2026-10-25.csv`. Change the pattern in Settings or `.env` if you prefer a different convention.
-
-The application archives the uploaded CSV under the configured daily filename in the local data folder. If that filename already exists, it adds a numeric suffix. Duplicate prevention uses the timestamp, devotee, sale date, book, and (for coded entries) line position. Re-importing the complete response sheet skips previously seen submissions and adds new ones; older sales remain stored in SQLite. The import result calls out duplicate-only imports and rejected rows; review and correct rejected rows before relying on dashboard totals. On the Overview tab, select a date to see that day's totals and devotee rankings; it defaults to today. After importing a CSV, select **Refresh dashboard** in the sidebar to return to the Overview with the latest saved data.
-
-Google Forms timestamps are important for distinguishing two legitimate submissions of the same book by the same person on the same date. Keep the Timestamp column in the CSV. For slash-separated dates in legacy imports, the importer infers day-first or month-first ordering from unambiguous dates in the same CSV; if all dates are ambiguous, it retains the month-first default. Coded-book form dates use day-first ordering.
-
-## CSV columns
-
-The new form's export includes Timestamp, Distribution Date, Distributor, Location, Books Distributed, Total Collection Received, Total Shastra Daan, Total Books Distributed, and Remarks. The importer also continues to support legacy exports containing Devotee, Date of Sale, Book Sold, and Quantity columns.
-
-For legacy response CSVs without a Quantity column, each row is treated as quantity 1. Grid-style legacy exports are also supported when columns are active book titles and populated cells contain positive whole-number quantities.
-
-Downloaded sales and import-history CSVs escape formula-leading text, including values preceded by whitespace or control characters. Numeric values remain numeric in the export.
-
-Imported devotee names are added to the devotee directory automatically when needed, so they appear in the leaderboard without needing to be entered separately.
-
-Supported dates include M/D/YYYY, MM/DD/YYYY, YYYY-MM-DD, DD/MM/YYYY, and DD-MMM-YYYY (for example, 25-Oct-2026). Slash-separated date ordering is inferred from unambiguous dates in the same CSV; the coded-book form uses day-first ordering.
+**Important: Community Cloud is not durable storage for this app's data.** Sales, catalogue changes, targets, and settings are stored in local SQLite and `.env` files; those files can be lost when the app is restarted or redeployed. Website responses can be fetched again from the response sheet, but app-only changes do not automatically persist. Keep the source sheet and independent backups, and migrate to durable hosted storage before relying on Cloud as the system of record.
 
 ## Book catalogue, prices, and points
 

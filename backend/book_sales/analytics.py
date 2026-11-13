@@ -7,7 +7,7 @@ def dashboard_summary(sale_date=None):
     active_books = query_df("SELECT COUNT(*) AS n FROM books WHERE active=1").iloc[0]["n"]
     totals = query_df("""
         SELECT COALESCE(SUM(quantity),0) AS books_sold,
-               COALESCE(SUM(points * quantity),0) AS points,
+               COALESCE(SUM(COALESCE(reported_points_total, points * quantity)),0) AS points,
                COALESCE(ROUND(SUM(COALESCE(amount_collected, unit_price * quantity)),2),0) AS revenue,
                COALESCE(ROUND(SUM(shastra_daan),2),0) AS shastra_daan,
                COUNT(*) AS sale_records,
@@ -33,7 +33,7 @@ def dashboard_summary(sale_date=None):
 def accumulated_points(as_of_date, start_date=None, end_date=None):
     period_end = min(as_of_date, end_date) if end_date else as_of_date
     total = query_df(
-        "SELECT COALESCE(SUM(points * quantity), 0) AS points "
+        "SELECT COALESCE(SUM(COALESCE(reported_points_total, points * quantity)), 0) AS points "
         "FROM sales WHERE sale_date <= ? "
         "AND (? IS NULL OR sale_date >= ?)",
         (period_end, start_date, start_date),
@@ -44,7 +44,7 @@ def leaderboard(include_all_active=False, sale_date=None):
     sql = """
         SELECT s.seller_name AS seller,
                COALESCE(SUM(sa.quantity),0) AS books_sold,
-               COALESCE(SUM(sa.points * sa.quantity),0) AS points,
+               COALESCE(SUM(COALESCE(sa.reported_points_total, sa.points * sa.quantity)),0) AS points,
                COALESCE(ROUND(SUM(COALESCE(sa.amount_collected, sa.unit_price * sa.quantity)),2),0) AS revenue,
                COALESCE(ROUND(SUM(sa.shastra_daan),2),0) AS shastra_daan,
                COALESCE(t.target_points,0) AS target_points
@@ -67,7 +67,8 @@ def leaderboard(include_all_active=False, sale_date=None):
 def daily_summary(start_date=None, end_date=None):
     return query_df(
         """
-        SELECT sale_date, SUM(quantity) AS books_sold, SUM(points * quantity) AS points,
+        SELECT sale_date, SUM(quantity) AS books_sold,
+               SUM(COALESCE(reported_points_total, points * quantity)) AS points,
                ROUND(SUM(COALESCE(amount_collected, unit_price * quantity)),2) AS revenue,
                ROUND(SUM(shastra_daan),2) AS shastra_daan
         FROM sales
@@ -82,15 +83,16 @@ def daily_summary(start_date=None, end_date=None):
 def book_performance(sale_date=None):
     return query_df(
         """
-        SELECT sales.book_name AS book, COALESCE(books.book_tag, '') AS book_tag,
+        SELECT sales.book_name AS book, sales.language AS language,
+               COALESCE(books.book_tag, '') AS book_tag,
                SUM(quantity) AS copies,
-               SUM(points * quantity) AS points,
+               SUM(COALESCE(reported_points_total, points * quantity)) AS points,
                ROUND(SUM(COALESCE(amount_collected, unit_price * quantity)),2) AS revenue,
                ROUND(SUM(shastra_daan),2) AS shastra_daan
         FROM sales
         LEFT JOIN books ON books.book_name = sales.book_name COLLATE NOCASE
         WHERE (? IS NULL OR sale_date = ?)
-        GROUP BY sales.book_name, books.book_tag
+        GROUP BY sales.book_name, sales.language, books.book_tag
         ORDER BY copies DESC, book COLLATE NOCASE
         """,
         (sale_date, sale_date),
@@ -99,8 +101,9 @@ def book_performance(sale_date=None):
 
 def list_sales():
     return query_df("""
-        SELECT id, form_timestamp, seller_name, sale_date, location, book_name, quantity, points,
-               points * quantity AS total_points, unit_price,
+        SELECT id, form_timestamp, external_submission_id, seller_name, sale_date,
+               location, book_name, book_category, language, quantity, points,
+               COALESCE(reported_points_total, points * quantity) AS total_points, unit_price,
                COALESCE(amount_collected, unit_price * quantity) AS amount_collected,
                shastra_daan, remarks, source_file, imported_at
         FROM sales ORDER BY sale_date DESC, id DESC
@@ -119,7 +122,10 @@ def update_sale_points(sale_id, points):
     points = float(points)
     if not math.isfinite(points) or points < 0:
         raise ValueError("Points must be a finite, non-negative number.")
-    execute("UPDATE sales SET points=? WHERE id=?", (points, int(sale_id)))
+    execute(
+        "UPDATE sales SET points=?, reported_points_total=NULL WHERE id=?",
+        (points, int(sale_id)),
+    )
 
 def export_csv(frame):
     import unicodedata

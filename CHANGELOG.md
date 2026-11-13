@@ -1,5 +1,13 @@
 # Release history
 
+## [1.9.0] - 2026-11-13
+
+- Add a Streamlit Community Cloud entry point and deployment guidance
+- Embed the IBC Sarjapur entry form and sync the live `Lists`, `responses`, and `submissions` workbook tabs
+- Display book-level responses and submission summaries, preserving sheet-reported prices, amounts, points, and totals
+- Support private Google Sheets access with server-side service-account credentials
+- Remove the response CSV upload page; website responses sync directly from the workbook
+
 ## [1.8.0] - 2026-11-12
 
 - Add optional, inclusive start and end dates for overall target progress
