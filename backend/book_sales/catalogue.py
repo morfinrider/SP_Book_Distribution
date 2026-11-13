@@ -230,6 +230,229 @@ def import_catalogue_csv(content):
     return {"added": added, "updated": updated}
 
 
+def merge_distribution_catalogue(rows):
+    now = now_iso()
+    added = updated = 0
+    variants_added = variants_updated = 0
+    active_variant_keys = set()
+    grouped = {}
+    for name, category, language, price, points in rows:
+        key = name.casefold()
+        entry = grouped.setdefault(
+            key, {"name": name, "categories": set(), "variants": []}
+        )
+        entry["categories"].add(category)
+        entry["variants"].append((language, price, points))
+
+    with connect() as con:
+        for entry in grouped.values():
+            name = entry["name"]
+            category = " / ".join(
+                sorted(entry["categories"], key=str.casefold)
+            )
+            languages = sorted(
+                {language for language, _, _ in entry["variants"]},
+                key=str.casefold,
+            )
+            existing = con.execute(
+                "SELECT id, book_tag, languages, price, default_points, active "
+                "FROM books WHERE book_name=? COLLATE NOCASE",
+                (name,),
+            ).fetchone()
+            is_new_book = existing is None
+            existing_variants = {}
+            if existing is not None:
+                existing_variants = {
+                    row["language"].casefold(): row
+                    for row in con.execute(
+                        "SELECT language, book_category, price, points, active "
+                        "FROM book_variants "
+                        "WHERE book_id=?",
+                        (existing["id"],),
+                    )
+                }
+            configured_prices = [
+                price for _, price, _ in entry["variants"] if price is not None
+            ]
+            title_price = configured_prices[0] if configured_prices else None
+            title_points = next(
+                (
+                    points
+                    for language, _, points in entry["variants"]
+                    if language.casefold() == "english" and points is not None
+                ),
+                next(
+                    (points for _, _, points in entry["variants"] if points is not None),
+                    None,
+                ),
+            )
+            if existing is None:
+                con.execute(
+                    """
+                    INSERT INTO books
+                        (book_name, book_tag, languages, default_points, price, active, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        name,
+                        category,
+                        ", ".join(languages),
+                        title_points if title_points is not None else 1,
+                        title_price if title_price is not None else 0,
+                        now,
+                        now,
+                    ),
+                )
+                added += 1
+                existing = con.execute(
+                    "SELECT id, book_tag, languages, price, default_points, active "
+                    "FROM books WHERE book_name=? COLLATE NOCASE",
+                    (name,),
+                ).fetchone()
+            language_text = ", ".join(languages)
+            new_base_price = (
+                title_price if title_price is not None else float(existing["price"])
+            )
+            new_base_points = (
+                title_points
+                if title_points is not None
+                else float(existing["default_points"])
+            )
+            if (
+                existing["book_tag"] != category
+                or existing["languages"] != language_text
+                or float(existing["price"]) != new_base_price
+                or float(existing["default_points"]) != new_base_points
+                or not existing["active"]
+            ):
+                con.execute(
+                    """
+                    UPDATE books SET book_tag=?, languages=?, price=?, default_points=?,
+                        active=1, updated_at=? WHERE id=?
+                    """,
+                    (
+                        category,
+                        language_text,
+                        new_base_price,
+                        new_base_points,
+                        now,
+                        existing["id"],
+                    ),
+                )
+                if not is_new_book:
+                    updated += 1
+
+            for language, source_price, source_points in entry["variants"]:
+                previous = existing_variants.get(language.casefold())
+                variant_price = (
+                    source_price
+                    if source_price is not None
+                    else title_price
+                    if title_price is not None
+                    else float(previous["price"])
+                    if previous is not None
+                    else new_base_price
+                )
+                variant_points = (
+                    source_points
+                    if source_points is not None
+                    else float(previous["points"])
+                    if previous is not None
+                    else new_base_points
+                )
+                if previous is None:
+                    con.execute(
+                        """
+                        INSERT INTO book_variants
+                            (book_id,language,book_category,price,points,active,updated_at)
+                        VALUES(?,?,?,?,?,1,?)
+                        """,
+                        (
+                            existing["id"],
+                            language,
+                            category,
+                            variant_price,
+                            variant_points,
+                            now,
+                        ),
+                    )
+                    variants_added += 1
+                else:
+                    if (
+                        previous["price"] != variant_price
+                        or previous["points"] != variant_points
+                        or previous["language"] != language
+                        or previous["book_category"] != category
+                        or not previous["active"]
+                    ):
+                        con.execute(
+                            """
+                            UPDATE book_variants
+                            SET language=?, book_category=?, price=?, points=?,
+                                active=1, updated_at=?
+                            WHERE book_id=? AND language=? COLLATE NOCASE
+                            """,
+                            (
+                                language,
+                                category,
+                                variant_price,
+                                variant_points,
+                                now,
+                                existing["id"],
+                                previous["language"],
+                            ),
+                        )
+                        variants_updated += 1
+                active_variant_keys.add((name.casefold(), language.casefold()))
+
+        for variant in con.execute(
+            """
+            SELECT v.id, b.book_name, v.language
+            FROM book_variants v JOIN books b ON b.id=v.book_id
+            WHERE v.active=1
+            """
+        ).fetchall():
+            if (
+                variant["book_name"].casefold(),
+                variant["language"].casefold(),
+            ) not in active_variant_keys:
+                con.execute(
+                    "UPDATE book_variants SET active=0, updated_at=? WHERE id=?",
+                    (now, variant["id"]),
+                )
+    _write_catalogue_file()
+    return {
+        "added": added,
+        "updated": updated,
+        "variants_added": variants_added,
+        "variants_updated": variants_updated,
+    }
+
+
+def list_book_variants(include_inactive=False):
+    sql = """
+        SELECT v.id, b.book_name, v.book_category, v.language, v.price, v.points,
+               v.active, v.updated_at
+        FROM book_variants v
+        JOIN books b ON b.id = v.book_id
+    """
+    if not include_inactive:
+        sql += " WHERE v.active=1"
+    sql += " ORDER BY b.book_name COLLATE NOCASE, v.language COLLATE NOCASE"
+    return query_df(sql)
+
+
+def get_book_variant_pricing_catalogue():
+    variants = list_book_variants()
+    return {
+        (str(row["book_name"]).casefold(), str(row["language"]).casefold()): (
+            float(row["points"]),
+            float(row["price"]),
+        )
+        for _, row in variants.iterrows()
+    }
+
+
 def _apply_catalogue_rows(rows):
     now = now_iso()
     with connect() as con:
@@ -402,7 +625,7 @@ def deactivate_book(book_id):
     _write_catalogue_file()
 
 def list_books(include_inactive=False):
-    sql = "SELECT id, book_name, book_tag, code, price, default_points, active, created_at, updated_at FROM books"
+    sql = "SELECT id, book_name, book_tag, code, languages, price, default_points, active, created_at, updated_at FROM books"
     if not include_inactive:
         sql += " WHERE active=1"
     sql += " ORDER BY book_name COLLATE NOCASE"
@@ -445,6 +668,7 @@ def refresh_sales_prices_from_catalogue():
                 WHERE books.book_name = sales.book_name COLLATE NOCASE
             )
             AND amount_collected IS NULL
+            AND source_file != 'IBC Sarjapur web form'
             AND EXISTS (
                 SELECT 1 FROM books
                 WHERE books.book_name = sales.book_name COLLATE NOCASE

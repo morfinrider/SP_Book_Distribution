@@ -309,9 +309,7 @@ def _render_app():
         APP_NAME,
         APP_VERSION,
         CATALOGUE_CSV_URL,
-        IMPORT_FILENAME_PATTERN,
         get_env_setting,
-        import_filename,
         save_env_settings,
     )
     from book_sales.db import initialize_database
@@ -325,21 +323,24 @@ def _render_app():
         export_sales_csv,
         get_settings,
         import_catalogue_csv,
-        import_response_csv,
         leaderboard,
         list_books,
         list_imports,
         list_sales,
         list_seller_targets,
         list_sellers,
+        list_website_submissions,
         daily_summary,
         export_csv,
         refresh_sales_prices_from_catalogue,
         save_settings,
         set_seller_target,
+        sync_distribution_catalogue,
+        sync_distribution_responses,
         sync_book_catalogue_from_url,
         update_book,
         update_sale_points,
+        list_book_variants,
     )
 
     st.set_page_config(page_title=APP_NAME, page_icon="📖", layout="wide")
@@ -525,16 +526,33 @@ def _render_app():
         "Overview": ("⌂", "Dashboard"),
         "Refresh dashboard": ("↻", "Dashboard"),
         "Sales records": ("▤", "Dashboard"),
-        "Import CSV": ("↑", "Dashboard"),
+        "Response entry": ("↗", "Dashboard"),
         "Book catalogue": ("▣", "Manage"),
         "Devotees & targets": ("♙", "Manage"),
         "Settings": ("⚙", "Manage"),
     }
 
 
+    def _google_sheet_credentials():
+        from streamlit.errors import StreamlitSecretNotFoundError
+
+        try:
+            service_account_info = st.secrets.get("google_service_account")
+            api_key = st.secrets.get("GOOGLE_SHEETS_API_KEY", "")
+        except StreamlitSecretNotFoundError:
+            service_account_info = None
+            api_key = ""
+        api_key = api_key or os.environ.get("GOOGLE_SHEETS_API_KEY", "")
+        return api_key, dict(service_account_info) if service_account_info else None
+
+
     def _sidebar_navigation():
         if "active_page" not in st.session_state:
             st.session_state.active_page = "Overview"
+        elif st.session_state.active_page == "Import CSV":
+            st.session_state.active_page = "Overview"
+        elif st.session_state.active_page == "Website entries":
+            st.session_state.active_page = "Response entry"
         elif st.session_state.active_page == "Sellers & targets":
             st.session_state.active_page = "Devotees & targets"
 
@@ -598,10 +616,13 @@ def _render_app():
         return frame.rename(
             columns={
                 "form_timestamp": "Submitted at",
+                "external_submission_id": "Submission ID",
                 "seller_name": "Devotee",
                 "sale_date": "Sale date",
                 "location": "Location",
                 "book_name": "Book",
+                "book_category": "Book category",
+                "language": "Language",
                 "quantity": "Copies",
                 "points": "Points per copy",
                 "total_points": "Total points",
@@ -822,6 +843,7 @@ def _render_app():
                 books = books.rename(
                     columns={
                         "book": "Book",
+                        "language": "Language",
                         "book_tag": "Book tag",
                         "copies": "Copies distributed",
                         "points": "Points earned",
@@ -900,94 +922,217 @@ def _render_app():
                     st.rerun()
 
 
-    def _render_import():
-        _page_heading("Bring in responses", "Import sales", "Upload a Google Forms response export to add sales.")
-        with st.expander("How to download, rename, and upload your CSV", expanded=True):
-            st.markdown(
-                """
-                1. Open the linked Google Sheet and choose **File → Download → Comma-separated values (.csv)**.
-                2. Optionally rename the downloaded file to the suggested name below (for example, `book_sales_2026-10-25.csv`).
-                3. Choose the renamed CSV with the uploader, then select **Import responses**.
-                4. Select **Refresh dashboard** in the sidebar to return to the latest Overview data.
-
-                For the new form, enter one book per line as
-                `BookCode | Quantity | AmountCollected | ShastraDaan`. The code must match
-                the Book catalogue; submission totals are checked against these entries.
-                The original file name is optional. The app archives a copy using the configured daily filename pattern.
-                Keep the **Timestamp** column in the export so repeated submissions can be distinguished.
-                """
+    def _render_website_entries():
+        _page_heading(
+            "IBC Sarjapur · Book Marathon 2026",
+            "Response entry",
+            "Use the existing public entry form and sync its response sheet into this dashboard.",
+        )
+        entry_tab, responses_tab = st.tabs(["Enter distribution", "Synced responses"])
+        with entry_tab:
+            st.warning(
+                "This form is public at books.iskw.in, even when this dashboard is private. "
+                "Anyone with the form URL can submit there."
             )
-        pattern = get_env_setting("IMPORT_FILENAME_PATTERN", IMPORT_FILENAME_PATTERN)
-        try:
-            suggested_filename = import_filename(date.today(), pattern)
-            st.info(f"Suggested archive name for today: **{suggested_filename}**")
-        except ValueError as exc:
-            st.error(f"Import filename configuration error: {exc}")
+            st.iframe(
+                "https://books.iskw.in/",
+                height=1050,
+            )
+        with responses_tab:
+            st.caption(
+                "The app refreshes the book list and response sheet on page open and every "
+                "5 minutes while this page is open. Use the button to sync immediately."
+            )
 
-        uploaded = st.file_uploader("Select response CSV", type=["csv"], key="response_csv")
-        if uploaded and st.button("Import responses", type="primary"):
-            try:
-                result = import_response_csv(uploaded.getvalue(), uploaded.name)
-                if result["invalid"]:
-                    st.warning(
-                        f"Import needs attention: {result['invalid']} response row(s) "
-                        f"were rejected; {result['added']} new sale row(s) were added. "
-                        "Review the rejected rows below before relying on dashboard totals."
-                    )
-                elif result["added"] == 0:
-                    st.info(
-                        "Import complete: no new sale rows were added; "
-                        f"{result['duplicates']} duplicate sale line(s) were skipped."
-                    )
-                else:
-                    st.success(
-                        f"Import complete: {result['added']} new sale row(s) added."
-                    )
-                st.caption(f"Archived a copy in the app's local import history as `{result['archive_file']}`.")
-                first, second, third = st.columns(3)
-                first.metric("Rows in file", result["rows_seen"])
-                second.metric("Duplicates skipped", result["duplicates"])
-                third.metric("Invalid rows", result["invalid"])
-                if result["unknown_books"]:
-                    st.warning("Unknown titles used fallback points and zero price: " + ", ".join(result["unknown_books"]))
-                if result["unmatched_book_columns"]:
-                    st.warning(
-                        "CSV book columns are not in the catalogue: "
-                        + ", ".join(result["unmatched_book_columns"])
-                        + ". Add each title with its price and points in Book catalogue, "
-                        "then upload the CSV again."
-                    )
-                if result["issues"]:
-                    with st.expander("Rows requiring review", expanded=True):
-                        st.write("\n".join(result["issues"]))
-            except (ValueError, OSError) as exc:
-                st.error(f"Import failed: {exc}")
-
-        with st.expander("Recent import history"):
-            imports = list_imports()
-            if imports.empty:
-                st.caption("No imports yet.")
-            else:
-                st.dataframe(
-                    imports.rename(
-                        columns={
-                            "source_file": "File",
-                            "imported_at": "Imported at",
-                            "rows_seen": "Input rows",
-                            "rows_added": "Sale lines added",
-                            "duplicates_skipped": "Duplicates skipped",
-                            "invalid_rows": "Invalid rows",
-                            "notes": "Details",
-                        }
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
+            @st.fragment(run_every="5m")
+            def _render_synced_responses():
+                api_key, service_account_info = _google_sheet_credentials()
+                has_credentials = bool(service_account_info or api_key)
+                sync_requested = st.button(
+                    "Sync website responses now",
+                    type="primary",
+                    key="sync_website_responses_now",
                 )
+                last_sync = st.session_state.get("website_responses_last_sync", 0)
+                auto_sync_due = (
+                    has_credentials and time.monotonic() - last_sync >= 300
+                )
+                if sync_requested or auto_sync_due:
+                    if not has_credentials:
+                        st.error(
+                            "Configure the Google service account in Streamlit Cloud Secrets "
+                            "before syncing the response sheet."
+                        )
+                    else:
+                        try:
+                            result = sync_distribution_responses(
+                                api_key,
+                                service_account_info,
+                            )
+                            st.session_state.website_responses_last_sync = time.monotonic()
+                            if result["invalid"] or result["submissions_invalid"]:
+                                st.warning(
+                                    f"Sync completed with {result['invalid']} invalid row(s). "
+                                    f"{result['added']} book row(s) added, "
+                                    f"{result['updated']} updated; "
+                                    f"{result['duplicates']} unchanged. "
+                                    f"{result['submissions_invalid']} invalid submission summary row(s)."
+                                )
+                            else:
+                                st.success(
+                                    f"Sync complete: {result['added']} added, "
+                                    f"{result['updated']} updated; "
+                                    f"{result['duplicates']} unchanged."
+                                )
+                            st.caption(
+                                f"Catalogue: {result['catalogue_added']} new title(s), "
+                                f"{result['catalogue_updated']} updated; "
+                                f"{result['variants_added']} new language variant(s), "
+                                f"{result['variants_updated']} updated."
+                            )
+                            st.caption(
+                                f"Submission summaries: {result['submissions_added']} new, "
+                                f"{result['submissions_updated']} updated, "
+                                f"{result['submissions_unchanged']} unchanged, "
+                                f"{result['submissions_invalid']} invalid."
+                            )
+                            if result["issues"]:
+                                st.write("\n".join(result["issues"]))
+                            if result["submission_issues"]:
+                                st.write("\n".join(result["submission_issues"]))
+                        except (ValueError, OSError, sqlite3.Error) as exc:
+                            st.error(f"Could not sync website responses: {exc}")
+
+                if not has_credentials:
+                    st.info(
+                        "Add the Google service account in Streamlit Cloud → App settings → "
+                        "Secrets. The response sheet is not fetched until server credentials are configured."
+                    )
+
+                book_rows_tab, submissions_tab = st.tabs(
+                    ["Book-level responses", "Submission summaries"]
+                )
+                with book_rows_tab:
+                    website_sales = list_sales()
+                    website_sales = website_sales[
+                        website_sales["source_file"] == "IBC Sarjapur web form"
+                    ]
+                    if website_sales.empty:
+                        st.info("No website responses have been synced yet.")
+                    else:
+                        sales_display = _sales_display_frame(website_sales)
+                        st.caption(
+                            f"{len(website_sales):,} website response row(s) are in the app's sales history."
+                        )
+                        st.dataframe(
+                            sales_display,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        st.download_button(
+                            "Download website responses CSV",
+                            export_sales_csv(sales_display),
+                            "ibc_sarjapur_book_distribution.csv",
+                            "text/csv",
+                        )
+                with submissions_tab:
+                    summaries = list_website_submissions()
+                    if summaries.empty:
+                        st.info("No submission summaries have been synced yet.")
+                    else:
+                        summaries = summaries.rename(
+                            columns={
+                                "submission_id": "Submission ID",
+                                "submitted_at": "Submitted at",
+                                "seller_name": "Name",
+                                "location": "Location",
+                                "sale_date": "Date",
+                                "total_copies": "Total copies",
+                                "total_points": "Total points",
+                                "lakshmi_due": "Lakshmi due",
+                                "lakshmi_transferred": "Lakshmi transferred",
+                                "shastra_daan": "Shastra Daan",
+                            }
+                        ).drop(columns=["updated_at"])
+                        st.dataframe(
+                            summaries,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        st.download_button(
+                            "Download submission summaries CSV",
+                            export_csv(summaries),
+                            "ibc_sarjapur_submission_summaries.csv",
+                            "text/csv",
+                        )
+
+            _render_synced_responses()
 
 
     def _render_catalogue():
         _page_heading("Books & values", "Book catalogue", "Maintain each book's short code, category, price, and points.")
-        st.caption("Use the short code in the Google Form's Books Distributed entries. Tags can describe books as small, medium, big, and so on.")
+        st.caption(
+            "The spreadsheet is authoritative for website book variants, languages, prices, "
+            "and points. Local prices and points below remain for legacy Google Forms imports."
+        )
+        if st.button("Sync book list from Google Sheet"):
+            try:
+                api_key, service_account_info = _google_sheet_credentials()
+                result = sync_distribution_catalogue(api_key, service_account_info)
+                st.success(
+                    f"Sheet sync complete: {result['added']} new title(s), "
+                    f"{result['updated']} title(s) updated; "
+                    f"{result['variants_added']} new language variant(s), "
+                    f"{result['variants_updated']} updated."
+                )
+                st.session_state.book_catalogue_last_sync = time.monotonic()
+                st.rerun()
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                st.error(f"Could not sync the book list: {exc}")
+
+        @st.fragment(run_every="5m")
+        def _render_sheet_catalogue():
+            last_sync = st.session_state.get("book_catalogue_last_sync", 0)
+            if time.monotonic() - last_sync >= 300:
+                try:
+                    api_key, service_account_info = _google_sheet_credentials()
+                    sync_distribution_catalogue(api_key, service_account_info)
+                    st.session_state.book_catalogue_last_sync = time.monotonic()
+                except (ValueError, OSError, sqlite3.Error) as exc:
+                    st.error(f"Could not refresh the spreadsheet catalogue: {exc}")
+            variants = list_book_variants(include_inactive=True)
+            st.markdown("#### Website catalogue from spreadsheet")
+            if variants.empty:
+                st.info("Sync the spreadsheet to load book languages, prices, and points.")
+            else:
+                variants = variants.rename(
+                    columns={
+                        "book_name": "Book",
+                        "book_category": "Category",
+                        "language": "Language",
+                        "price": "Price (₹)",
+                        "points": "Points",
+                        "active": "In sheet",
+                        "updated_at": "Synced at",
+                    }
+                )
+                st.dataframe(
+                    variants[
+                        [
+                            "Book",
+                            "Category",
+                            "Language",
+                            "Price (₹)",
+                            "Points",
+                            "In sheet",
+                            "Synced at",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        _render_sheet_catalogue()
         with st.expander("Upload catalogue CSV", expanded=False):
             st.caption(
                 "Upload a CSV with book name and price columns. Points, short code, and tag "
@@ -1017,7 +1162,7 @@ def _render_app():
 
         books = list_books(include_inactive=True)
         if not books.empty:
-            editable = books[["id", "book_name", "code", "book_tag", "price", "default_points", "active"]].copy()
+            editable = books[["id", "book_name", "code", "book_tag", "languages", "price", "default_points", "active"]].copy()
             editable["default_points"] = editable["default_points"].astype(float)
             editable["active"] = editable["active"].astype(bool)
             edited = st.data_editor(
@@ -1025,7 +1170,7 @@ def _render_app():
                 hide_index=True,
                 use_container_width=True,
                 num_rows="fixed",
-                disabled=["id"],
+                disabled=["id", "languages"],
                 column_config={
                     "id": None,
                     "book_name": st.column_config.TextColumn("Book title", required=True),
@@ -1036,6 +1181,10 @@ def _render_app():
                     "book_tag": st.column_config.TextColumn(
                         "Book tag",
                         help="For example: small book, medium book, or big book.",
+                    ),
+                    "languages": st.column_config.TextColumn(
+                        "Available languages",
+                        help="Synced from the book-distribution Google Sheet.",
                     ),
                     "price": st.column_config.NumberColumn("Price per copy", min_value=0, format="%.2f"),
                     "default_points": st.column_config.NumberColumn(
@@ -1248,16 +1397,8 @@ def _render_app():
                     step=0.01,
                     format="%.2f",
                 )
-                pattern = st.text_input(
-                    "Daily archive filename pattern",
-                    value=get_env_setting(
-                        "IMPORT_FILENAME_PATTERN", IMPORT_FILENAME_PATTERN
-                    ),
-                    help="Use {date} for today's ISO date, such as book_sales_{date}.csv.",
-                )
                 if st.form_submit_button("Save preferences", type="primary"):
                     try:
-                        import_filename(date.today(), pattern)
                         save_settings({
                             "overall_target": str(float(overall_target)),
                             "fallback_points": str(float(fallback_points)),
@@ -1272,7 +1413,6 @@ def _render_app():
                                 else ""
                             ),
                         })
-                        save_env_settings({"IMPORT_FILENAME_PATTERN": pattern})
                         st.success("Preferences saved.")
                         st.rerun()
                     except (ValueError, OSError) as exc:
@@ -1341,8 +1481,8 @@ def _render_app():
         _render_overview()
     elif active_page == "Sales records":
         _render_sales()
-    elif active_page == "Import CSV":
-        _render_import()
+    elif active_page == "Response entry":
+        _render_website_entries()
     elif active_page == "Book catalogue":
         _render_catalogue()
     elif active_page == "Devotees & targets":

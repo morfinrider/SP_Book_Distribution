@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .env
 .env.tmp
+.streamlit/secrets.toml
 Haribol_Book_Distribution_Data/*.sqlite3
 Haribol_Book_Distribution_Data/*.sqlite3-shm
 Haribol_Book_Distribution_Data/*.sqlite3-wal
