@@ -331,7 +331,7 @@ class AnalyticsTests(unittest.TestCase):
 
 
 class DashboardChartTests(unittest.TestCase):
-    def test_dashboard_charts_are_labeled_static_and_show_single_day(self):
+    def test_dashboard_charts_are_labeled_static_bars(self):
         summary = {
             "books_sold": 3, "points": 2, "revenue": 150, "shastra_daan": 10,
             "sale_records": 1, "participating_devotees": 1, "overall_target": 0,
@@ -340,6 +340,12 @@ class DashboardChartTests(unittest.TestCase):
         daily = pd.DataFrame([
             {"sale_date": "2026-11-23", "books_sold": 3, "revenue": 150, "shastra_daan": 10}
         ])
+        multiple_days = pd.concat([
+            daily,
+            pd.DataFrame([
+                {"sale_date": "2026-11-20", "books_sold": 5, "revenue": 200, "shastra_daan": 0}
+            ]),
+        ], ignore_index=True)
         books = pd.DataFrame([
             {"book": "Book A", "language": "English", "book_tag": "", "copies": 3,
              "points": 2, "revenue": 150, "shastra_daan": 10}
@@ -351,7 +357,7 @@ class DashboardChartTests(unittest.TestCase):
             patch("book_sales.services.dashboard_summary", return_value=summary),
             patch("book_sales.services.leaderboard", return_value=pd.DataFrame()),
             patch("book_sales.services.accumulated_points", return_value=0),
-            patch("book_sales.services.daily_summary", return_value=daily),
+            patch("book_sales.services.daily_summary", return_value=daily) as daily_summary,
             patch("book_sales.services.book_performance", return_value=books),
             patch(
                 "book_sales.services.distribution_report",
@@ -360,6 +366,10 @@ class DashboardChartTests(unittest.TestCase):
             patch("book_sales.report_image.render_distribution_report_jpeg", return_value=image),
         ):
             app = AppTest.from_file(
+                str(Path(__file__).resolve().parents[1] / "streamlit_app.py")
+            ).run()
+            daily_summary.return_value = multiple_days
+            multiple_days_app = AppTest.from_file(
                 str(Path(__file__).resolve().parents[1] / "streamlit_app.py")
             ).run()
 
@@ -381,12 +391,18 @@ class DashboardChartTests(unittest.TestCase):
         ):
             spec = json.loads(chart.proto.spec)
             self.assertNotIn("params", spec)
-            self.assertTrue(spec["mark"]["point"])
+            self.assertEqual(spec["mark"]["type"], "bar")
             self.assertEqual(spec["encoding"]["x"]["title"], "Date")
+            self.assertEqual(spec["encoding"]["x"]["timeUnit"], "yearmonthdate")
             self.assertEqual(spec["encoding"]["y"]["field"], field)
             self.assertEqual(spec["encoding"]["y"]["title"], title)
             data = pyarrow.ipc.open_stream(chart.proto.datasets[0].data.data).read_all().to_pandas()
             self.assertEqual(data.iloc[0][field], daily.iloc[0][field])
+        self.assertFalse(multiple_days_app.exception)
+        multi_chart = multiple_days_app.get("vega_lite_chart")[0]
+        data = pyarrow.ipc.open_stream(multi_chart.proto.datasets[0].data.data).read_all().to_pandas()
+        self.assertEqual(data["sale_date"].tolist(), ["2026-11-20", "2026-11-23"])
+        self.assertEqual(data["books_sold"].tolist(), [5, 3])
         bar_spec = json.loads(charts[3].proto.spec)
         self.assertNotIn("params", bar_spec)
         self.assertEqual(bar_spec["layer"][0]["encoding"]["y"]["title"], "Book (language)")

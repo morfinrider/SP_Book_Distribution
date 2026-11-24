@@ -1000,7 +1000,7 @@ def _render_app():
                     f"{best_day_copies:,} copies",
                     str(best_day),
                 )
-                st.caption("Each point represents a day with recorded sales.")
+                st.caption("Each bar represents a day with recorded sales.")
                 for title, field, axis_label, color in (
                     ("Copies distributed by date", "books_sold", "Copies distributed", "#2C805A"),
                     ("Collection received by date", "revenue", "Collection received (₹)", "#D39A3F"),
@@ -1009,10 +1009,11 @@ def _render_app():
                     st.markdown(f"#### {title}")
                     chart = (
                         alt.Chart(trend.reset_index())
-                        .mark_line(point=True, color=color)
+                        .mark_bar(color=color)
                         .encode(
                             x=alt.X(
                                 "sale_date:T",
+                                timeUnit="yearmonthdate",
                                 title="Date",
                                 axis=alt.Axis(format="%d %b %Y", labelAngle=-35),
                             ),
