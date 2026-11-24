@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 
-- Make dashboard charts larger, labeled, and stationary
+- Make dashboard charts larger, labeled, and stationary, using bars for daily values
+
+## [1.12.0] - 2026-11-24
+
 - Restore catalogue inventory summary cards alongside the flexible Lists table
 - Display the synced Lists tab as a read-only table that follows renamed and added columns
 - Fix rupee symbol rendering in downloadable distribution reports across platforms
