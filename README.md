@@ -43,7 +43,7 @@ Use `feature` for a minor-version increment, `fix` for a patch increment, and `b
 - Devotee names from imports match existing names despite differences in case or extra whitespace.
 - Overview comparisons against the previous day, configurable 7/30/90-day and all-time trends, average copies per sale/day, and best distribution day.
 
-The Overview date controls the daily metrics, previous-day comparisons, trend charts, and book performance. Overall target progress uses points accumulated through the selected date, including that date. The trend period selector shows activity up to the selected date. The **Top 10 most active devotees** list is independent of the Overview date: it aggregates sales through today, includes earlier sales, shows the latest distribution date for each devotee, and orders the most recently active devotees first.
+The Overview date controls the daily metrics, previous-day comparisons, trend charts, and book performance. Overall target progress uses points accumulated through the selected date, including that date. The trend period selector shows activity up to the selected date. The labeled trend charts show copies, collection received, and Shastra Daan for days with recorded sales; the book-performance chart shows copies for the top eight book and language entries. The charts are fixed rather than cursor-controlled. The **Top 10 most active devotees** list is independent of the Overview date: it aggregates sales through today, includes earlier sales, shows the latest distribution date for each devotee, and orders the most recently active devotees first.
 
 The **Daily reports** section uses the selected Overview date for its daily totals and includes cumulative totals through that date. Both are limited to the configured overall target start and end dates; daily totals are zero if the selected date is outside that range. The report groups sales into Small Books, Medium Books, Big Books, Maha Big Books, Bhagavatam, and Caitanya Caritamrita; unrecognized categories appear under Other. Target progress respects the configured target period. Shastra Daan collected uses the `shastra_daan` total, and Total Lakshmi Collected uses the `lakshmi_transferred` total from submission summaries. The report can be downloaded as a JPEG image.
 
@@ -53,6 +53,7 @@ Each valid synced book-level response can represent multiple copies of one book.
 
 - Python 3.11+
 - Streamlit for the hosted and local user interface
+- Altair for dashboard charts
 - SQLite for local storage (hosted Streamlit Community Cloud storage is ephemeral)
 - pandas for tabular analytics
 - Python standard library for CSV parsing, hashing, file management and database access; `google-auth` for optional Google Sheets service-account access

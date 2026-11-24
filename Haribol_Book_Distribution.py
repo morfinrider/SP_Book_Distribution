@@ -305,6 +305,7 @@ def _render_app():
 
     import sqlite3
     import threading
+    import altair as alt
     import streamlit as st
 
     from book_sales.config import (
@@ -999,22 +1000,27 @@ def _render_app():
                     f"{best_day_copies:,} copies",
                     str(best_day),
                 )
-                copies_chart, revenue_chart, daan_chart = st.columns(3, gap="large")
-                copies_chart.line_chart(
-                    trend[["books_sold"]].rename(columns={"books_sold": "Copies"}),
-                    height=340,
-                    color="#2C805A",
-                )
-                revenue_chart.line_chart(
-                    trend[["revenue"]].rename(columns={"revenue": "Collection received"}),
-                    height=340,
-                    color="#D39A3F",
-                )
-                daan_chart.line_chart(
-                    trend[["shastra_daan"]].rename(columns={"shastra_daan": "Shastra Daan"}),
-                    height=340,
-                    color="#7084B5",
-                )
+                st.caption("Each point represents a day with recorded sales.")
+                for title, field, axis_label, color in (
+                    ("Copies distributed by date", "books_sold", "Copies distributed", "#2C805A"),
+                    ("Collection received by date", "revenue", "Collection received (₹)", "#D39A3F"),
+                    ("Shastra Daan by date", "shastra_daan", "Shastra Daan (₹)", "#7084B5"),
+                ):
+                    st.markdown(f"#### {title}")
+                    chart = (
+                        alt.Chart(trend.reset_index())
+                        .mark_line(point=True, color=color)
+                        .encode(
+                            x=alt.X(
+                                "sale_date:T",
+                                title="Date",
+                                axis=alt.Axis(format="%d %b %Y", labelAngle=-35),
+                            ),
+                            y=alt.Y(f"{field}:Q", title=axis_label),
+                        )
+                        .properties(height=240)
+                    )
+                    st.altair_chart(chart, use_container_width=True)
 
         with st.expander("Top 10 most active devotees", expanded=True):
             if leaders.empty:
@@ -1073,11 +1079,35 @@ def _render_app():
                         "Shastra Daan (₹)": st.column_config.NumberColumn(format="%.2f"),
                     },
                 )
-                st.bar_chart(
-                    books.head(8)
-                    .sort_values("Copies distributed")
-                    .set_index("Book")[["Copies distributed"]],
-                    color="#2C805A",
+                st.markdown("#### Top books by copies distributed")
+                chart_books = books.head(8).copy()
+                languages = chart_books["Language"].fillna("").astype(str).str.strip()
+                chart_books["Book and language"] = chart_books["Book"].astype(str).where(
+                    languages.eq(""),
+                    chart_books["Book"].astype(str) + " (" + languages + ")",
+                )
+                chart = alt.Chart(chart_books).encode(
+                    x=alt.X(
+                        "Copies distributed:Q",
+                        title="Copies distributed",
+                        scale=alt.Scale(
+                            domainMin=0,
+                            domainMax=max(1, float(chart_books["Copies distributed"].max()) * 1.15),
+                        ),
+                    ),
+                    y=alt.Y(
+                        "Book and language:N",
+                        title="Book (language)",
+                        sort="-x",
+                        axis=alt.Axis(labelLimit=320),
+                    ),
+                )
+                st.altair_chart(
+                    (chart.mark_bar(color="#2C805A") + chart.mark_text(
+                        align="left", dx=5
+                    ).encode(text=alt.Text("Copies distributed:Q", format=",.0f")))
+                    .properties(height=max(220, len(chart_books) * 40)),
+                    use_container_width=True,
                 )
 
 

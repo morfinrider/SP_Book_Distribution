@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import sqlite3
 import sys
 import unittest
@@ -7,6 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
+import pyarrow.ipc
+from streamlit.testing.v1 import AppTest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
@@ -325,6 +328,71 @@ class AnalyticsTests(unittest.TestCase):
     def test_google_sheet_sync_boolean_settings_reject_invalid_values(self):
         with self.assertRaisesRegex(ValueError, "must be a boolean"):
             save_settings({"google_sheets_manual_sync": "sometimes"})
+
+
+class DashboardChartTests(unittest.TestCase):
+    def test_dashboard_charts_are_labeled_static_and_show_single_day(self):
+        summary = {
+            "books_sold": 3, "points": 2, "revenue": 150, "shastra_daan": 10,
+            "sale_records": 1, "participating_devotees": 1, "overall_target": 0,
+            "overall_target_start_date": "", "overall_target_end_date": "",
+        }
+        daily = pd.DataFrame([
+            {"sale_date": "2026-11-23", "books_sold": 3, "revenue": 150, "shastra_daan": 10}
+        ])
+        books = pd.DataFrame([
+            {"book": "Book A", "language": "English", "book_tag": "", "copies": 3,
+             "points": 2, "revenue": 150, "shastra_daan": 10}
+        ])
+        image = (Path(__file__).resolve().parents[1] / "assets" / "Srila_Prabhupada.jpeg").read_bytes()
+        with (
+            patch("book_sales.db.initialize_database"),
+            patch("book_sales.services.get_settings", return_value={"google_sheets_auto_sync": "0"}),
+            patch("book_sales.services.dashboard_summary", return_value=summary),
+            patch("book_sales.services.leaderboard", return_value=pd.DataFrame()),
+            patch("book_sales.services.accumulated_points", return_value=0),
+            patch("book_sales.services.daily_summary", return_value=daily),
+            patch("book_sales.services.book_performance", return_value=books),
+            patch(
+                "book_sales.services.distribution_report",
+                return_value={"period_start_date": "", "period_end_date": ""},
+            ),
+            patch("book_sales.report_image.render_distribution_report_jpeg", return_value=image),
+        ):
+            app = AppTest.from_file(
+                str(Path(__file__).resolve().parents[1] / "streamlit_app.py")
+            ).run()
+
+        self.assertFalse(app.exception)
+        headings = [element.value for element in app.markdown]
+        for heading in (
+            "#### Copies distributed by date",
+            "#### Collection received by date",
+            "#### Shastra Daan by date",
+            "#### Top books by copies distributed",
+        ):
+            self.assertIn(heading, headings)
+        charts = app.get("vega_lite_chart")
+        self.assertEqual(len(charts), 4)
+        for chart, field, title in zip(
+            charts[:3],
+            ("books_sold", "revenue", "shastra_daan"),
+            ("Copies distributed", "Collection received (₹)", "Shastra Daan (₹)"),
+        ):
+            spec = json.loads(chart.proto.spec)
+            self.assertNotIn("params", spec)
+            self.assertTrue(spec["mark"]["point"])
+            self.assertEqual(spec["encoding"]["x"]["title"], "Date")
+            self.assertEqual(spec["encoding"]["y"]["field"], field)
+            self.assertEqual(spec["encoding"]["y"]["title"], title)
+            data = pyarrow.ipc.open_stream(chart.proto.datasets[0].data.data).read_all().to_pandas()
+            self.assertEqual(data.iloc[0][field], daily.iloc[0][field])
+        bar_spec = json.loads(charts[3].proto.spec)
+        self.assertNotIn("params", bar_spec)
+        self.assertEqual(bar_spec["layer"][0]["encoding"]["y"]["title"], "Book (language)")
+        data = pyarrow.ipc.open_stream(charts[3].proto.datasets[0].data.data).read_all().to_pandas()
+        self.assertEqual(data.iloc[0]["Book and language"], "Book A (English)")
+        self.assertEqual(data.iloc[0]["Copies distributed"], 3)
 
 
 if __name__ == "__main__":
