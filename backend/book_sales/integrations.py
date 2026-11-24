@@ -9,6 +9,8 @@ import urllib.request
 from contextlib import nullcontext
 from decimal import Decimal, InvalidOperation
 
+import pandas as pd
+
 from .catalogue import (
     _write_catalogue_file,
     get_book_pricing_catalogue,
@@ -23,7 +25,6 @@ from .settings import get_settings
 
 RESPONSES_RANGE = "A:N"
 SUBMISSIONS_RANGE = "A:J"
-LISTS_RANGE = "A:S"
 WEBSITE_SOURCE = "IBC Sarjapur web form"
 _GOOGLE_SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 _LISTS_HEADERS = (
@@ -67,6 +68,7 @@ _LISTS_NUMERIC_FIELDS = (
 _HEADER_ALIASES = {
     "allottedboksamt": "allottedbooksamt",
 }
+_LISTS_REQUIRED_HEADERS = {"bookcategory", "book", "language", "price", "points"}
 
 
 def _normalize_header(value):
@@ -94,7 +96,7 @@ def _sheet_range(tab_key, columns, spreadsheet_config=None):
     ):
         raise ValueError(f"Configure a valid {tab_key.replace('_', ' ')} name.")
     quoted_tab = "'" + tab_name.replace("'", "''") + "'"
-    return f"{quoted_tab}!{columns}"
+    return f"{quoted_tab}!{columns}" if columns else quoted_tab
 
 
 def _connection_scope(connection):
@@ -111,11 +113,10 @@ def parse_distribution_catalogue_csv(content):
     if not reader.fieldnames:
         raise ValueError("The distribution catalogue CSV has no header row.")
     columns = {_canonical_header(name): name for name in reader.fieldnames}
-    required = {"bookcategory", "book", "language", "price", "points"}
-    if not required.issubset(columns):
+    if not _LISTS_REQUIRED_HEADERS.issubset(columns):
         raise ValueError(
             "The Lists tab must contain these columns: "
-            + ", ".join(_LISTS_HEADERS)
+            + "Book Category, Book, Language, Price, Points"
             + "."
         )
 
@@ -188,28 +189,71 @@ def _catalogue_records_csv(records):
         writer.writerow(
             [
                 record.get(_canonical_header(header), "")
+                if _canonical_header(header) in _LISTS_REQUIRED_HEADERS | {"subcategory"}
+                else ""
                 for header in _LISTS_HEADERS
             ]
         )
     return output.getvalue().encode("utf-8")
 
 
-def _fetch_distribution_catalogue_rows(
+def _fetch_distribution_catalogue(
     api_key=None,
     service_account_info=None,
     spreadsheet_config=None,
 ):
-    records = _fetch_sheet_records(
-        _sheet_range("lists_tab", LISTS_RANGE, spreadsheet_config),
-        {_canonical_header(header) for header in _LISTS_HEADERS},
+    values = _fetch_sheet_values(
+        _sheet_range("lists_tab", "", spreadsheet_config),
         "Lists",
         api_key,
         service_account_info,
         spreadsheet_config,
     )
-    return parse_distribution_catalogue_csv(
-        _catalogue_records_csv(records)
+    records = _sheet_records(values, _LISTS_REQUIRED_HEADERS, "Lists")
+    records = [
+        record for record in records
+        if any(str(value).strip() for value in record.values())
+    ]
+    return parse_distribution_catalogue_csv(_catalogue_records_csv(records)), values
+
+
+def _save_lists_snapshot(connection, values):
+    connection.execute(
+        "INSERT INTO lists_snapshot (id, sheet_values) VALUES (1, ?) "
+        "ON CONFLICT(id) DO UPDATE SET sheet_values=excluded.sheet_values",
+        (json.dumps(values, ensure_ascii=False),),
     )
+
+
+def get_lists_snapshot():
+    with connect() as con:
+        row = con.execute(
+            "SELECT sheet_values FROM lists_snapshot WHERE id=1"
+        ).fetchone()
+    if row is None:
+        return None
+    values = json.loads(row["sheet_values"])
+    width = max(len(row) for row in values)
+    headers = []
+    used = set()
+    for index in range(width):
+        name = str(values[0][index]).strip() if index < len(values[0]) else ""
+        base = name or f"Column {index + 1}"
+        name = base
+        suffix = 2
+        while name in used:
+            name = f"{base} ({suffix})"
+            suffix += 1
+        headers.append(name)
+        used.add(name)
+    rows = [
+        [
+            str(row[index]) if index < len(row) and row[index] is not None else ""
+            for index in range(width)
+        ]
+        for row in values[1:]
+    ]
+    return pd.DataFrame(rows, columns=headers)
 
 
 def sync_distribution_catalogue(
@@ -217,17 +261,26 @@ def sync_distribution_catalogue(
     service_account_info=None,
     spreadsheet_config=None,
 ):
-    rows = _fetch_distribution_catalogue_rows(
+    rows, values = _fetch_distribution_catalogue(
         api_key,
         service_account_info,
         spreadsheet_config,
     )
-    return merge_distribution_catalogue(rows)
+    with connect() as con:
+        result = merge_distribution_catalogue(rows, connection=con)
+        _save_lists_snapshot(con, values)
+    try:
+        _write_catalogue_file()
+    except OSError as exc:
+        result["catalogue_file_warning"] = (
+            "The database sync succeeded, but the local catalogue mirror "
+            f"could not be refreshed: {exc}"
+        )
+    return result
 
 
-def _fetch_sheet_records(
+def _fetch_sheet_values(
     sheet_range,
-    required_headers,
     sheet_label,
     api_key=None,
     service_account_info=None,
@@ -315,7 +368,12 @@ def _fetch_sheet_records(
         raise ValueError(
             f"The {sheet_label} sheet is empty or has no header row."
         )
+    if any(not isinstance(row, list) for row in values):
+        raise ValueError(f"The {sheet_label} sheet returned invalid rows.")
+    return values
 
+
+def _sheet_records(values, required_headers, sheet_label):
     headers = [_canonical_header(value) for value in values[0]]
     if not required_headers.issubset(headers):
         raise ValueError(
@@ -323,6 +381,8 @@ def _fetch_sheet_records(
             + ", ".join(sorted(required_headers - set(headers)))
         )
 
+    if any(headers.count(header) > 1 for header in required_headers):
+        raise ValueError(f"The {sheet_label} sheet has duplicate required columns.")
     records = []
     for row in values[1:]:
         record = {
@@ -332,6 +392,20 @@ def _fetch_sheet_records(
         }
         records.append(record)
     return records
+
+
+def _fetch_sheet_records(
+    sheet_range,
+    required_headers,
+    sheet_label,
+    api_key=None,
+    service_account_info=None,
+    spreadsheet_config=None,
+):
+    values = _fetch_sheet_values(
+        sheet_range, sheet_label, api_key, service_account_info, spreadsheet_config
+    )
+    return _sheet_records(values, required_headers, sheet_label)
 
 
 def fetch_response_sheet(
@@ -405,8 +479,8 @@ def test_google_sheets_connection(
         (
             "lists_tab",
             "Lists",
-            "A1:S1",
-            {_canonical_header(header) for header in _LISTS_HEADERS},
+            "1:1",
+            _LISTS_REQUIRED_HEADERS,
         ),
         (
             "responses_tab",
@@ -874,7 +948,7 @@ def sync_distribution_responses(
     submissions = fetch_submission_sheet(
         api_key, service_account_info, spreadsheet_config
     )
-    catalogue_rows = _fetch_distribution_catalogue_rows(
+    catalogue_rows, lists_values = _fetch_distribution_catalogue(
         api_key, service_account_info, spreadsheet_config
     )
 
@@ -890,6 +964,7 @@ def sync_distribution_responses(
             connection=con,
         )
         _reject_invalid_sync_rows("submission summary", summary_result)
+        _save_lists_snapshot(con, lists_values)
 
     try:
         _write_catalogue_file()

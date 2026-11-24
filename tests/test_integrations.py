@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from book_sales import integrations
 from book_sales import catalogue
+from book_sales import analytics
+from book_sales.db import SCHEMA
 
 
 class IntegrationTests(unittest.TestCase):
@@ -202,26 +204,21 @@ class IntegrationTests(unittest.TestCase):
             connection.close()
 
     def test_catalogue_sync_reads_configured_lists_tab_with_api_key(self):
-        records = [
-            {
-                "bookcategory": "Big Book",
-                "book": "Title A",
-                "language": "English",
-                "price": 280,
-                "points": 2,
-            }
+        values = [
+            ["Book Category", "Book", "Language", "Price", "Points"],
+            ["Big Book", "Title A", "English", 280, 2],
         ]
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(SCHEMA)
         with (
             patch.object(
                 integrations,
-                "_fetch_sheet_records",
-                return_value=records,
+                "_fetch_sheet_values",
+                return_value=values,
             ) as fetch,
-            patch.object(
-                integrations,
-                "merge_distribution_catalogue",
-                return_value={"added": 1},
-            ) as merge,
+            patch.object(integrations, "connect", return_value=connection),
+            patch.object(integrations, "_write_catalogue_file"),
         ):
             spreadsheet_config = {
                 "spreadsheet_id": "configured-sheet",
@@ -235,28 +232,210 @@ class IntegrationTests(unittest.TestCase):
             )
 
         fetch.assert_called_once_with(
-            "'Book Lists'!A:S",
-            {integrations._canonical_header(header) for header in integrations._LISTS_HEADERS},
+            "'Book Lists'",
             "Lists",
             "test-key",
             None,
             spreadsheet_config,
         )
+        self.assertEqual(result["added"], 1)
         self.assertEqual(
-            merge.call_args.args[0],
-            [
-                (
-                    "Title A",
-                    "Big Book",
-                    "English",
-                    280.0,
-                    2.0,
-                    "",
-                    *([None] * 13),
-                )
-            ],
+            connection.execute("SELECT price, default_points FROM books").fetchone()[:],
+            (280.0, 2.0),
         )
-        self.assertEqual(result, {"added": 1})
+        connection.close()
+
+    def test_lists_snapshot_tracks_renamed_and_new_columns(self):
+        headers = [
+            "Book Category", "Sub Category", "Book", "Language", "Price", "Points",
+            "Stock", "Stock Value", "Books Distributed", "Amount Collected",
+            "Books Billed", "Billed Amount", "Books Unbilled", "Unbilled Amount",
+            "Allotted Books", "Allotted Boks Amt", "Available Stock",
+            "Available Stock Amt", "New field", "Another field",
+        ]
+        values = [
+            headers,
+            ["Big Book", "", "Title A", "English", 280, 2, 10, 2800, 4,
+             1000, 1, 280, 3, 720, 1, 280, 6, 1680, "note", 0],
+        ]
+        changed = [headers + ["Added later"], values[1] + ["new value"]]
+
+        class FakeResponse:
+            def __init__(self, sheet_values):
+                self.sheet_values = sheet_values
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return json.dumps({"values": self.sheet_values}).encode("utf-8")
+
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(SCHEMA)
+        try:
+            with (
+                patch.object(integrations, "connect", return_value=connection),
+                patch.object(integrations, "_write_catalogue_file"),
+                patch.object(
+                    integrations.urllib.request, "urlopen",
+                    side_effect=[FakeResponse(values), FakeResponse(changed)],
+                ) as fetch,
+            ):
+                config = {"spreadsheet_id": "test-sheet", "lists_tab": "Lists"}
+                integrations.sync_distribution_catalogue("test-key", spreadsheet_config=config)
+                first = integrations.get_lists_snapshot()
+                self.assertEqual(list(first.columns), headers)
+                self.assertEqual(first.iloc[0]["Available Stock"], "6")
+                self.assertEqual(first.iloc[0]["Another field"], "0")
+
+                integrations.sync_distribution_catalogue("test-key", spreadsheet_config=config)
+                updated = integrations.get_lists_snapshot()
+                self.assertEqual(list(updated.columns), headers + ["Added later"])
+                self.assertEqual(updated.iloc[0]["Added later"], "new value")
+                self.assertIn("/values/%27Lists%27?", fetch.call_args.args[0].full_url)
+        finally:
+            connection.close()
+
+    def test_lists_sync_rejects_missing_or_duplicate_core_headers(self):
+        for headers in (
+            ["Book Category", "Language", "Price", "Points"],
+            ["Book Category", "Book", "BOOK", "Language", "Price", "Points"],
+        ):
+            with self.subTest(headers=headers):
+                with patch.object(integrations, "_fetch_sheet_values", return_value=[headers]):
+                    with self.assertRaisesRegex(ValueError, "missing required columns|duplicate required columns"):
+                        integrations._fetch_distribution_catalogue(
+                            "test-key", spreadsheet_config={"lists_tab": "Lists"}
+                        )
+
+    def test_full_sync_saves_lists_snapshot(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(SCHEMA)
+        values = [["Book", "Available Stock"], ["Title", 7]]
+        try:
+            with (
+                patch.object(integrations, "connect", return_value=connection),
+                patch.object(integrations, "_write_catalogue_file"),
+                patch.object(integrations, "get_settings", return_value={"fallback_points": "1"}),
+                patch.object(integrations, "fetch_response_sheet", return_value=[]),
+                patch.object(integrations, "fetch_submission_sheet", return_value=[]),
+                patch.object(
+                    integrations, "_fetch_distribution_catalogue",
+                    return_value=([("Title", "Big Book", "English", 50.0, 1.0)], values),
+                ),
+            ):
+                integrations.sync_distribution_responses("test-key", spreadsheet_config={"lists_tab": "Lists"})
+                snapshot = integrations.get_lists_snapshot()
+                self.assertEqual(list(snapshot.columns), ["Book", "Available Stock"])
+                self.assertEqual(snapshot.iloc[0]["Available Stock"], "7")
+        finally:
+            connection.close()
+
+    def test_full_sync_feeds_sales_and_dashboard_with_renamed_lists_columns(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(SCHEMA)
+        lists = [
+            ["Book Category", "Sub Category", "Book", "Language", "Price", "Points",
+             "Available Stock", "Available Stock Amt"],
+            ["Big Book", "", "Title A", "English", 50, 2, 6, 300],
+        ]
+        responses = [
+            ["submission_id", "submitted_at", "name", "location", "date",
+             "book_category", "book_sub_category", "book_name", "language",
+             "quantity", "price", "amount", "points", "points_total"],
+            ["sub-1", "2026-11-18T10:00:00Z", "Devotee", "Sarjapur", "2026-11-18",
+             "Big Book", "", "Title A", "English", 2, 45, 90, 2, 4],
+        ]
+        submissions = [
+            ["submission_id", "submitted_at", "name", "location", "date", "total_copies",
+             "total_points", "lakshmi_due", "lakshmi_transferred", "shastra_daan"],
+            ["sub-1", "2026-11-18T10:00:00Z", "Devotee", "Sarjapur", "2026-11-18",
+             2, 4, 90, 80, 10],
+        ]
+
+        class FakeResponse:
+            def __init__(self, values):
+                self.values = values
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return json.dumps({"values": self.values}).encode("utf-8")
+
+        def read_query(sql, params=()):
+            return pd.read_sql_query(sql, connection, params=params)
+
+        settings = {"fallback_points": "1", "overall_target": "0"}
+        config = {
+            "spreadsheet_id": "test-sheet", "lists_tab": "Lists",
+            "responses_tab": "responses", "submissions_tab": "submissions",
+        }
+        try:
+            with (
+                patch.object(integrations, "connect", return_value=connection),
+                patch.object(integrations, "_write_catalogue_file"),
+                patch.object(integrations, "get_settings", return_value=settings),
+                patch.object(analytics, "get_settings", return_value=settings),
+                patch.object(analytics, "query_df", side_effect=read_query),
+                patch.object(
+                    integrations.urllib.request, "urlopen",
+                    side_effect=[
+                        FakeResponse(values)
+                        for values in (responses, submissions, lists) * 2
+                    ],
+                ),
+            ):
+                first = integrations.sync_distribution_responses("test-key", spreadsheet_config=config)
+                second = integrations.sync_distribution_responses("test-key", spreadsheet_config=config)
+                self.assertEqual((first["added"], second["duplicates"]), (1, 1))
+                self.assertEqual((first["submissions_added"], second["submissions_unchanged"]), (1, 1))
+                sales = analytics.list_sales()
+                self.assertEqual(len(sales), 1)
+                self.assertEqual((sales.iloc[0]["amount_collected"], sales.iloc[0]["total_points"]), (90, 4))
+                summary = analytics.dashboard_summary("2026-11-18")
+                self.assertEqual((summary["books_sold"], summary["points"], summary["revenue"]), (2, 4, 90))
+                self.assertEqual(analytics.leaderboard(sale_date="2026-11-18").iloc[0]["books_sold"], 2)
+                report = analytics.distribution_report("2026-11-18")
+                self.assertEqual((report["daily_total_copies"], report["total_lakshmi_collected"]), (2, 80))
+                self.assertEqual(report["shastra_daan_collected"], 10)
+                self.assertEqual(integrations.get_lists_snapshot().iloc[0]["Available Stock"], "6")
+        finally:
+            connection.close()
+
+    def test_catalogue_and_snapshot_rollback_together_on_storage_error(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(SCHEMA)
+        values = [
+            ["Book Category", "Book", "Language", "Price", "Points"],
+            ["Big Book", "Title", "English", 50, 1],
+        ]
+        try:
+            with (
+                patch.object(integrations, "connect", return_value=connection),
+                patch.object(integrations, "_fetch_sheet_values", return_value=values),
+                patch.object(
+                    integrations, "_save_lists_snapshot",
+                    side_effect=sqlite3.OperationalError("storage failure"),
+                ),
+            ):
+                with self.assertRaisesRegex(sqlite3.OperationalError, "storage failure"):
+                    integrations.sync_distribution_catalogue(
+                        "test-key", spreadsheet_config={"lists_tab": "Lists"}
+                    )
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM books").fetchone()[0], 0)
+        finally:
+            connection.close()
 
     def test_spreadsheet_id_accepts_id_or_google_sheets_url(self):
         self.assertEqual(
@@ -310,15 +489,12 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 3)
         self.assertEqual(
             fetch.call_args_list[0].args[1],
-            {
-                integrations._canonical_header(header)
-                for header in integrations._LISTS_HEADERS
-            },
+            integrations._LISTS_REQUIRED_HEADERS,
         )
         self.assertIn("booksubcategory", fetch.call_args_list[1].args[1])
         self.assertEqual(
             fetch.call_args_list[0].args[0],
-            "'Books'!A1:S1",
+            "'Books'!1:1",
         )
         self.assertEqual(
             fetch.call_args_list[1].args[0],
@@ -748,6 +924,10 @@ class IntegrationTests(unittest.TestCase):
                 total_copies INTEGER, total_points REAL, lakshmi_due REAL,
                 lakshmi_transferred REAL, shastra_daan REAL, updated_at TEXT
             );
+            CREATE TABLE lists_snapshot (
+                id INTEGER PRIMARY KEY, sheet_values TEXT NOT NULL
+            );
+            INSERT INTO lists_snapshot VALUES (1, '[["Old"], ["previous"]]');
             """
         )
         response = {
@@ -797,10 +977,11 @@ class IntegrationTests(unittest.TestCase):
                 ),
                 patch.object(
                     integrations,
-                    "_fetch_distribution_catalogue_rows",
-                    return_value=[
-                        ("Title", "Big Book", "English", 50.0, 1.0)
-                    ],
+                    "_fetch_distribution_catalogue",
+                    return_value=(
+                        [("Title", "Big Book", "English", 50.0, 1.0)],
+                        [["Book"], ["Title"]],
+                    ),
                 ),
             ):
                 with self.assertRaisesRegex(
@@ -830,6 +1011,10 @@ class IntegrationTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM website_submissions"
                 ).fetchone()[0],
                 0,
+            )
+            self.assertEqual(
+                json.loads(connection.execute("SELECT sheet_values FROM lists_snapshot").fetchone()[0]),
+                [["Old"], ["previous"]],
             )
         finally:
             connection.close()

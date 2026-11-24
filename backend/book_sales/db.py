@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS settings (
     setting_key TEXT PRIMARY KEY,
     setting_value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS lists_snapshot (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    sheet_values TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sales (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     row_key TEXT NOT NULL UNIQUE,
