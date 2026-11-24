@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Display the synced Lists tab as a read-only table that follows renamed and added columns
 - Fix rupee symbol rendering in downloadable distribution reports across platforms
 
 ## [1.11.0] - 2026-11-22

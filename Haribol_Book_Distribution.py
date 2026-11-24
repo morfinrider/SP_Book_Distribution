@@ -321,6 +321,7 @@ def _render_app():
         export_sales_csv,
         get_persistent_settings,
         get_settings,
+        get_lists_snapshot,
         leaderboard,
         list_imports,
         list_sales,
@@ -333,12 +334,9 @@ def _render_app():
         set_seller_target,
         sync_distribution_catalogue,
         sync_distribution_responses,
-        summarize_inventory_values,
         test_google_sheets_connection,
-        unmatched_website_response_totals,
         load_google_service_account,
         update_sale_points,
-        list_book_variants,
         distribution_report,
     )
     from book_sales.report_image import render_distribution_report_jpeg
@@ -1341,135 +1339,13 @@ def _render_app():
                     "Configure [google_service_account] in Streamlit Secrets before syncing."
                 )
 
-        unmatched_rows, unmatched_quantity = unmatched_website_response_totals()
-        if unmatched_rows:
-            st.warning(
-                f"{unmatched_rows} synced website-response row(s), totaling "
-                f"{unmatched_quantity} copies, do not match an active catalogue entry "
-                "by book name and language. They are excluded from catalogue inventory "
-                "totals; align the names and languages in the Lists and responses tabs."
-            )
-
-        variants = list_book_variants(
-            include_inactive=True,
-            include_response_totals=True,
-        )
-        st.markdown("#### Catalogue and inventory snapshot")
-        if variants.empty:
+        snapshot = get_lists_snapshot()
+        st.markdown("#### Lists sheet")
+        if snapshot is None:
             st.info("Sync the spreadsheet to load book and inventory details.")
         else:
-            variants = variants.rename(
-                columns={
-                    "book_name": "Book",
-                    "book_category": "Category",
-                    "book_sub_category": "Subcategory",
-                    "language": "Language",
-                    "price": "Price (₹)",
-                    "points": "Points",
-                    "stock": "Starting stock (Lists)",
-                    "stock_value": "Stock value (₹)",
-                    "books_distributed": "Books distributed (Lists)",
-                    "balance_books": "Balance books (Lists)",
-                    "amount_collected": "Amount collected (₹)",
-                    "books_billed": "Books billed",
-                    "billed_amount": "Billed amount (₹)",
-                    "books_unbilled": "Books unbilled",
-                    "unbilled_amount": "Unbilled amount (₹)",
-                    "allotted_books": "Allotted books",
-                    "allotted_books_amt": "Allotted books amount (₹)",
-                    "response_books_distributed": "Books distributed (responses)",
-                    "response_balance_books": "Balance books (calculated)",
-                    "ibc_s_stock": "IBC-S stock",
-                    "ibc_s_stock_amt": "IBC-S stock amount (₹)",
-                    "active": "In sheet",
-                    "updated_at": "Synced at",
-                }
-            )
-            st.markdown("#### Inventory snapshot")
-            active_variants = variants[variants["In sheet"] == 1]
-            inventory_metrics = (
-                ("Starting stock (Lists)", "Starting stock (Lists)", "count"),
-                ("Stock value", "Stock value (₹)", "currency"),
-                (
-                    "Books distributed (responses)",
-                    "Books distributed (responses)",
-                    "count",
-                ),
-                (
-                    "Balance books (calculated)",
-                    "Balance books (calculated)",
-                    "count",
-                ),
-            )
-            missing_metric_values = []
-            for column, (label, field, value_type) in zip(
-                st.columns(len(inventory_metrics)),
-                inventory_metrics,
-            ):
-                field_values = active_variants[field]
-                value, populated_count, row_count = summarize_inventory_values(
-                    field_values
-                )
-                missing_count = row_count - populated_count
-                if missing_count:
-                    missing_metric_values.append(f"{label}: {missing_count}")
-                if value is None:
-                    formatted_value = "—"
-                else:
-                    if value_type == "currency":
-                        formatted_value = f"₹{value:,.2f}"
-                    else:
-                        formatted_value = f"{value:,.0f}"
-                column.metric(label, formatted_value)
-                column.caption(
-                    f"Values from {populated_count:,} of {row_count:,} active rows"
-                )
-            if missing_metric_values:
-                st.caption(
-                    "Totals include known values only; blank values are excluded, and "
-                    "a dash means none were available. Missing active Lists rows — "
-                    + ", ".join(missing_metric_values)
-                    + ". Fill those cells in the sheet for complete totals."
-                )
-            elif active_variants.empty:
-                st.caption(
-                    "No active Lists rows are available. Sync the configured spreadsheet "
-                    "to load current inventory."
-                )
-            st.caption(
-                "Starting stock and stock valuation come from Lists. Books distributed "
-                "uses synced website responses matched by book name and language; "
-                "calculated balance is starting stock minus those responses. The Lists "
-                "tab's original distributed and balance values remain visible for comparison."
-            )
             st.dataframe(
-                variants[
-                    [
-                        "Book",
-                        "Category",
-                        "Subcategory",
-                        "Language",
-                        "Price (₹)",
-                        "Points",
-                        "Starting stock (Lists)",
-                        "Stock value (₹)",
-                        "Books distributed (Lists)",
-                        "Books distributed (responses)",
-                        "Balance books (Lists)",
-                        "Balance books (calculated)",
-                        "Amount collected (₹)",
-                        "Books billed",
-                        "Billed amount (₹)",
-                        "Books unbilled",
-                        "Unbilled amount (₹)",
-                        "Allotted books",
-                        "Allotted books amount (₹)",
-                        "IBC-S stock",
-                        "IBC-S stock amount (₹)",
-                        "In sheet",
-                        "Synced at",
-                    ]
-                ],
+                snapshot,
                 use_container_width=True,
                 hide_index=True,
             )
