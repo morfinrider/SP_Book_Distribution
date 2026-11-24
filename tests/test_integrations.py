@@ -291,6 +291,16 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(list(first.columns), headers)
                 self.assertEqual(first.iloc[0]["Available Stock"], "6")
                 self.assertEqual(first.iloc[0]["Another field"], "0")
+                with patch.object(
+                    catalogue, "query_df",
+                    side_effect=lambda sql, params=(): pd.read_sql_query(sql, connection, params=params),
+                ):
+                    variants = catalogue.list_book_variants(include_response_totals=True)
+                inventory, warnings = integrations.catalogue_inventory_snapshot(first, variants)
+                self.assertEqual(warnings, [])
+                self.assertEqual(inventory.iloc[0]["stock"], 10)
+                self.assertEqual(inventory.iloc[0]["stock_value"], 2800)
+                self.assertEqual(inventory.iloc[0]["response_balance_books"], 10)
 
                 integrations.sync_distribution_catalogue("test-key", spreadsheet_config=config)
                 updated = integrations.get_lists_snapshot()
@@ -299,6 +309,63 @@ class IntegrationTests(unittest.TestCase):
                 self.assertIn("/values/%27Lists%27?", fetch.call_args.args[0].full_url)
         finally:
             connection.close()
+
+    def test_inventory_snapshot_uses_sheet_stock_and_matched_responses(self):
+        snapshot = pd.DataFrame(
+            [
+                ["TITLE A", "english", "10", "₹1,000", "6"],
+                ["Title A", "Hindi", "", "", "2"],
+            ],
+            columns=["Book", "Language", "Stock", "Stock Value", "Available Stock"],
+        )
+        variants = pd.DataFrame(
+            [
+                {"book_name": "Title A", "language": "Hindi",
+                 "stock": 99, "stock_value": 99, "response_books_distributed": 1},
+                {"book_name": "Title A", "language": "English",
+                 "stock": 99, "stock_value": 99, "response_books_distributed": 3},
+            ]
+        )
+
+        inventory, warnings = integrations.catalogue_inventory_snapshot(snapshot, variants)
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(
+            catalogue.summarize_inventory_values(inventory["stock"]), (10.0, 1, 2)
+        )
+        self.assertEqual(
+            catalogue.summarize_inventory_values(inventory["stock_value"]), (1000.0, 1, 2)
+        )
+        self.assertEqual(
+            catalogue.summarize_inventory_values(inventory["response_books_distributed"]),
+            (4.0, 2, 2),
+        )
+        self.assertEqual(
+            catalogue.summarize_inventory_values(inventory["response_balance_books"]),
+            (7.0, 1, 2),
+        )
+        self.assertEqual(snapshot.iloc[0]["Available Stock"], "6")
+
+    def test_inventory_snapshot_reports_invalid_or_ambiguous_values(self):
+        snapshot = pd.DataFrame(
+            [["Title A", "English", "bad", "10", "20"]],
+            columns=["Book", "Language", "Stock Value", "Stock", "Stock (2)"],
+        )
+        snapshot.attrs["source_headers"] = [
+            "Book", "Language", "Stock Value", "Stock", "Stock"
+        ]
+        variants = pd.DataFrame(
+            [{"book_name": "Title A", "language": "English",
+              "response_books_distributed": 2}]
+        )
+
+        inventory, warnings = integrations.catalogue_inventory_snapshot(snapshot, variants)
+
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(any("Multiple Stock columns" in warning for warning in warnings))
+        self.assertTrue(any("Stock Value has 1 invalid" in warning for warning in warnings))
+        for field in ("stock", "stock_value", "response_balance_books"):
+            self.assertEqual(catalogue.summarize_inventory_values(inventory[field]), (None, 0, 1))
 
     def test_lists_sync_rejects_missing_or_duplicate_core_headers(self):
         for headers in (

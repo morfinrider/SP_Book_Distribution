@@ -13,6 +13,7 @@ from .settings import get_persistent_settings, get_settings, save_settings
 from .credentials import load_google_service_account
 from .importer import import_response_csv
 from .integrations import (
+    catalogue_inventory_snapshot,
     fetch_response_sheet,
     fetch_submission_sheet,
     get_lists_snapshot,

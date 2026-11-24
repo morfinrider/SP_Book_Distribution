@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Restore catalogue inventory summary cards alongside the flexible Lists table
 - Display the synced Lists tab as a read-only table that follows renamed and added columns
 - Fix rupee symbol rendering in downloadable distribution reports across platforms
 

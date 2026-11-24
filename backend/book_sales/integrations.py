@@ -253,7 +253,67 @@ def get_lists_snapshot():
         ]
         for row in values[1:]
     ]
-    return pd.DataFrame(rows, columns=headers)
+    snapshot = pd.DataFrame(rows, columns=headers)
+    snapshot.attrs["source_headers"] = [
+        values[0][index] if index < len(values[0]) else ""
+        for index in range(width)
+    ]
+    return snapshot
+
+
+def catalogue_inventory_snapshot(snapshot, variants):
+    """Combine the current Lists inventory with matched website response totals."""
+    inventory = variants.copy()
+    warnings = []
+    columns = {}
+    source_headers = snapshot.attrs.get("source_headers", snapshot.columns)
+    for column, source_header in zip(snapshot.columns, source_headers):
+        columns.setdefault(_canonical_header(source_header), []).append(column)
+
+    rows = {
+        (str(row[columns["book"][0]]).strip().lower(),
+         str(row[columns["language"][0]]).strip().lower()): row
+        for _, row in snapshot.iterrows()
+    }
+    keys = [
+        (str(row["book_name"]).strip().lower(), str(row["language"]).strip().lower())
+        for _, row in inventory.iterrows()
+    ]
+    for field, header, label in (
+        ("stock", "stock", "Stock"),
+        ("stock_value", "stockvalue", "Stock Value"),
+    ):
+        source_columns = columns.get(header, [])
+        if len(source_columns) > 1:
+            warnings.append(f"Multiple {label} columns found; its total is unavailable.")
+        values = []
+        invalid_count = 0
+        for key in keys:
+            row = rows.get(key)
+            raw = (
+                str(row[source_columns[0]]).strip()
+                if row is not None and len(source_columns) == 1
+                else ""
+            )
+            if not raw:
+                values.append(None)
+                continue
+            try:
+                number = Decimal(raw.replace(",", "").replace("₹", "").strip())
+            except InvalidOperation:
+                number = Decimal("NaN")
+            if not number.is_finite() or number < 0 or not math.isfinite(float(number)):
+                invalid_count += 1
+                values.append(None)
+            else:
+                values.append(float(number))
+        if invalid_count:
+            warnings.append(f"{label} has {invalid_count} invalid value(s), excluded from totals.")
+        inventory[field] = values
+    inventory["response_balance_books"] = (
+        inventory["stock"] - inventory["response_books_distributed"]
+    )
+    return inventory, warnings
 
 
 def sync_distribution_catalogue(

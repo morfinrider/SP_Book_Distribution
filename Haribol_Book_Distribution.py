@@ -315,6 +315,7 @@ def _render_app():
     from book_sales.services import (
         add_seller,
         book_performance,
+        catalogue_inventory_snapshot,
         dashboard_summary,
         accumulated_points,
         create_backup_zip,
@@ -325,6 +326,7 @@ def _render_app():
         leaderboard,
         list_imports,
         list_sales,
+        list_book_variants,
         list_seller_targets,
         list_sellers,
         list_website_submissions,
@@ -332,11 +334,13 @@ def _render_app():
         export_csv,
         save_settings,
         set_seller_target,
+        summarize_inventory_values,
         sync_distribution_catalogue,
         sync_distribution_responses,
         test_google_sheets_connection,
         load_google_service_account,
         update_sale_points,
+        unmatched_website_response_totals,
         distribution_report,
     )
     from book_sales.report_image import render_distribution_report_jpeg
@@ -1340,10 +1344,63 @@ def _render_app():
                 )
 
         snapshot = get_lists_snapshot()
-        st.markdown("#### Lists sheet")
         if snapshot is None:
+            st.markdown("#### Lists sheet")
             st.info("Sync the spreadsheet to load book and inventory details.")
         else:
+            unmatched_rows, unmatched_quantity = unmatched_website_response_totals()
+            if unmatched_rows:
+                st.warning(
+                    f"{unmatched_rows} synced website-response row(s), totaling "
+                    f"{unmatched_quantity} copies, do not match an active catalogue entry "
+                    "by book name and language. They are excluded from catalogue inventory "
+                    "totals; align the names and languages in the Lists and responses tabs."
+                )
+            variants = list_book_variants(include_response_totals=True)
+            if not variants.empty:
+                inventory, warnings = catalogue_inventory_snapshot(snapshot, variants)
+                for warning in warnings:
+                    st.warning(warning)
+                st.markdown("#### Inventory snapshot")
+                inventory_metrics = (
+                    ("Starting stock (Lists)", "stock", "count"),
+                    ("Stock value", "stock_value", "currency"),
+                    ("Books distributed (responses)", "response_books_distributed", "count"),
+                    ("Balance books (calculated)", "response_balance_books", "count"),
+                )
+                missing_metric_values = []
+                for column, (label, field, value_type) in zip(
+                    st.columns(len(inventory_metrics)), inventory_metrics
+                ):
+                    value, populated_count, row_count = summarize_inventory_values(
+                        inventory[field]
+                    )
+                    missing_count = row_count - populated_count
+                    if missing_count:
+                        missing_metric_values.append(f"{label}: {missing_count}")
+                    if value is None:
+                        formatted_value = "—"
+                    elif value_type == "currency":
+                        formatted_value = f"₹{value:,.2f}"
+                    else:
+                        formatted_value = f"{value:,.0f}"
+                    column.metric(label, formatted_value)
+                    column.caption(
+                        f"Values from {populated_count:,} of {row_count:,} active rows"
+                    )
+                if missing_metric_values:
+                    st.caption(
+                        "Totals include known values only; blank or unavailable values "
+                        "are excluded, and a dash means none were available. Missing "
+                        "active Lists rows — " + ", ".join(missing_metric_values) + "."
+                    )
+                st.caption(
+                    "Starting stock and stock valuation come from the Stock and Stock Value "
+                    "columns in Lists. Books distributed uses synced website responses "
+                    "matched by book name and language; calculated balance is starting "
+                    "stock minus those responses."
+                )
+            st.markdown("#### Lists sheet")
             st.dataframe(
                 snapshot,
                 use_container_width=True,
